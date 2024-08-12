@@ -1,4 +1,4 @@
-// go:build !freebsd
+//go:build !freebsd
 
 // Copyright (c) 2016-2019 Tigera, Inc. All rights reserved.
 

@@ -452,19 +452,18 @@ func loadModules() {
 
 func setupIPForwarding() error {
 	fmt.Println("Enabling IPv4 forwarding")
-	cmd := exec.Command("sysctl", "-w", "net.inet.ip.forwarding=1")
-	cmd.Run()
-	if cmd.ProcessState.ExitCode() != 0 {
+	cmd_ipv4 := exec.Command("sysctl", "-w", "net.inet.ip.forwarding=1")
+	cmd_ipv4.Run()
+	if cmd_ipv4.ProcessState.ExitCode() != 0 {
 		return fmt.Errorf("ERROR: Could not enable ipv4 forwarding")
 	}
 
 	fmt.Println("Enabling IPv6 forwarding")
-	cmd := exec.Command("sysctl", "-w", "net.inet6.ip6.forwarding=1")
-	cmd.Run()
-	if cmd.ProcessState.ExitCode() != 0 {
+	cmd_ipv6 := exec.Command("sysctl", "-w", "net.inet6.ip6.forwarding=1")
+	cmd_ipv6.Run()
+	if cmd_ipv6.ProcessState.ExitCode() != 0 {
 		return fmt.Errorf("ERROR: Could not enable ipv6 forwarding")
 	}
-}
 
 	return nil
 }
