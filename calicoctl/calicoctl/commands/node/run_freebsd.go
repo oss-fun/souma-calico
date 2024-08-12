@@ -302,7 +302,7 @@ Description:
 	// command to remain attached and for nerdctl to remove the dead
 	// container so that it can be restarted by the init system.
 	cmd := []string{"nerdctl", "run", "--net=host", "--privileged",
-		"--name=calico-node"}
+		"--name=calico-node", "--platform", "linux/amd64"}
 	if initSystem {
 		cmd = append(cmd, "--rm")
 	} else {
