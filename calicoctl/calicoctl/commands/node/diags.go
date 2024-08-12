@@ -91,7 +91,7 @@ func runDiags(logDir string) error {
 		{"Dumping iptables (IPv4)", "iptables-save -c", "ipv4_tables"},
 		{"Dumping iptables (IPv6)", "ip6tables-save -c", "ipv6_tables"},
 		{"Dumping ipsets", "ipset list", "ipsets"},
-		{"Dumping ipsets (container)", "docker run --rm --privileged --net=host calico/node ipset list", "ipset_container"},
+		{"Dumping ipsets (container)", "nerdctl run --rm --privileged --net=host calico/node ipset list", "ipset_container"},
 		{"Copying journal for calico-node.service", "journalctl -u calico-node.service --no-pager", "journalctl_calico_node"},
 		{"Dumping felix stats", "pkill -SIGUSR1 felix", ""},
 	}
@@ -185,9 +185,9 @@ func getNodeContainerLogs(logDir string) {
 	}
 
 	// Get a list of Calico containers running on this Node.
-	result, err := exec.Command("docker", "ps", "-a", "--filter", "name=calico", "--format", "{{.Names}}: {{.CreatedAt}}").CombinedOutput()
+	result, err := exec.Command("nerdctl", "ps", "-a", "--filter", "name=calico", "--format", "{{.Names}}: {{.CreatedAt}}").CombinedOutput()
 	if err != nil {
-		fmt.Printf("Could not run docker command: %s\n", string(result))
+		fmt.Printf("Could not run nerdctl command: %s\n", string(result))
 		return
 	}
 
@@ -204,7 +204,7 @@ func getNodeContainerLogs(logDir string) {
 	fmt.Println("Copying logs from Calico containers")
 	err = os.WriteFile(logDir+"/"+"container_creation_time", []byte(containers), 0666)
 	if err != nil {
-		fmt.Printf("Could not save output of `docker ps` command to container_creation_time: %s\n", err)
+		fmt.Printf("Could not save output of `nerdctl ps` command to container_creation_time: %s\n", err)
 	}
 
 	// Grab the log for each container and write it as <containerName>.log.
@@ -212,7 +212,7 @@ func getNodeContainerLogs(logDir string) {
 	for scanner.Scan() {
 		name := strings.Split(scanner.Text(), ":")[0]
 		log.Debugf("Getting logs for container %s", name)
-		cLog, err := exec.Command("docker", "logs", name).CombinedOutput()
+		cLog, err := exec.Command("nerdctl", "logs", name).CombinedOutput()
 		if err != nil {
 			fmt.Printf("Could not pull log for container %s: %s\n", name, err)
 			continue
