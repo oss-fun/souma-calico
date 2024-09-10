@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 
@@ -99,7 +100,29 @@ func MaybeMountCgroupV2() (string, error) {
 }
 
 func mountCgroupV2(path string) error {
-	return syscall.Mount(path, path, "cgroup2", 0, "")
+	//return syscall.Mount(path, path, "cgroup2", 0, "")
+	fsType := "ufs"
+	data := ""
+
+	fsTypePtr, err := syscall.BytePtrFromString(fsType)
+	if err != nil {
+		return err
+	}
+	targetPtr, err := syscall.BytePtrFromString(path)
+	if err != nil {
+		return err
+	}
+	dataPtr, err := syscall.BytePtrFromString(data)
+	if err != nil {
+		return err
+	}
+
+	_, _, errno := syscall.RawSyscall6(21, uintptr(unsafe.Pointer(fsTypePtr)), uintptr(unsafe.Pointer(targetPtr)), uintptr(0), uintptr(unsafe.Pointer(dataPtr)), 0, 0)
+
+	if errno != 0 {
+		return errno
+	}
+	return nil
 }
 
 func isBPF(path string) (bool, error) {
@@ -121,7 +144,29 @@ func isCgroupV2(path string) (bool, error) {
 }
 
 func mountBPFfs(path string) error {
-	return syscall.Mount(path, path, "bpf", 0, "")
+	//return syscall.Mount(path, path, "bpf", 0, "")
+	fsType := "ufs"
+	data := ""
+
+	fsTypePtr, err := syscall.BytePtrFromString(fsType)
+	if err != nil {
+		return err
+	}
+	targetPtr, err := syscall.BytePtrFromString(path)
+	if err != nil {
+		return err
+	}
+	dataPtr, err := syscall.BytePtrFromString(data)
+	if err != nil {
+		return err
+	}
+
+	_, _, errno := syscall.RawSyscall6(21, uintptr(unsafe.Pointer(fsTypePtr)), uintptr(unsafe.Pointer(targetPtr)), uintptr(0), uintptr(unsafe.Pointer(dataPtr)), 0, 0)
+
+	if errno != 0 {
+		return errno
+	}
+	return nil
 }
 
 func isMount(path string) (bool, error) {
