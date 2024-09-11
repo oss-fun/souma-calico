@@ -30,7 +30,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"unsafe"
 
 	"golang.org/x/sys/unix"
 
