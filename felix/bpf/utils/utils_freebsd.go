@@ -127,20 +127,22 @@ func mountCgroupV2(path string) error {
 
 func isBPF(path string) (bool, error) {
 	var fsdata unix.Statfs_t
+	MY_BPF_FS_MAGIC := 0xcafe4a11
 	if err := unix.Statfs(path, &fsdata); err != nil {
 		return false, fmt.Errorf("%s is not mounted", path)
 	}
 
-	return uint32(fsdata.Type) == uint32(unix.BPF_FS_MAGIC), nil
+	return uint32(fsdata.Type) == uint32(MY_BPF_FS_MAGIC), nil
 }
 
 func isCgroupV2(path string) (bool, error) {
 	var fsdata unix.Statfs_t
+	MY_CGROUP2_SUPER_MAGIC := 0x63677270
 	if err := unix.Statfs(path, &fsdata); err != nil {
 		return false, fmt.Errorf("%s is not mounted", path)
 	}
 
-	return uint32(fsdata.Type) == uint32(unix.CGROUP2_SUPER_MAGIC), nil
+	return uint32(fsdata.Type) == uint32(MY_CGROUP2_SUPER_MAGIC), nil
 }
 
 func mountBPFfs(path string) error {
