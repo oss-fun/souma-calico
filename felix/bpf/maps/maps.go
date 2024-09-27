@@ -1,3 +1,5 @@
+//go:build !freebsd
+
 // Copyright (c) 2019-2023 Tigera, Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -221,8 +223,7 @@ func ResetSizes() {
 }
 
 func NewPinnedMap(params MapParameters) *PinnedMap {
-	BPF_OBJ_NAME_LEN_DAMMY := -1
-	if len(params.VersionedName()) >= BPF_OBJ_NAME_LEN_DAMMY {
+	if len(params.VersionedName()) >= unix.BPF_OBJ_NAME_LEN {
 		log.WithField("name", params.Name).Panicf("Bug: BPF map name too long (%d)", len(params.VersionedName()))
 	}
 	if val := Size(params.VersionedName()); val != 0 {
