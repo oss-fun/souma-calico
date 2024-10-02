@@ -1,3 +1,5 @@
+//go:build !freebsd
+
 // Copyright (c) 2021 Tigera, Inc. All rights reserved.
 //
 // Based on the version in the Weave project, Copyright Weaveworks:
