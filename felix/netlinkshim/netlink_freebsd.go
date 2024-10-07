@@ -47,6 +47,9 @@ type Interface interface {
 }
 
 func NewRealNetlink() (Interface, error) {
+	/*	
 	NETLINK_ROUTE := 0x0
 	return netlink.NewHandle(NETLINK_ROUTE)
+	*/
+	return nil, nil
 }
