@@ -26,7 +26,8 @@ import (
 	"github.com/containernetworking/cni/pkg/skel"
 	cniv1 "github.com/containernetworking/cni/pkg/types/100"
 	"github.com/containernetworking/plugins/pkg/ip"
-	"github.com/containernetworking/plugins/pkg/ns"
+	// "github.com/containernetworking/plugins/pkg/ns"
+	"github.com/oss-fun/souma-cni-plugins/pkg/ns"
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 
