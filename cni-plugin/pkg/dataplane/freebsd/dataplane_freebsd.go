@@ -29,11 +29,16 @@ import (
 	// "github.com/containernetworking/plugins/pkg/ns"
 	"github.com/oss-fun/souma-cni-plugins/pkg/ns"
 	"github.com/sirupsen/logrus"
-	"github.com/vishvananda/netlink"
+	// "github.com/vishvananda/netlink"
+	"github.com/oss-fun/netlink"
 
 	"github.com/projectcalico/calico/cni-plugin/pkg/types"
 	api "github.com/projectcalico/calico/libcalico-go/lib/apis/v3"
 	calicoclient "github.com/projectcalico/calico/libcalico-go/lib/clientv3"
+)
+
+const (
+	SYSCALL_NETLINK_ROUTE = 0x0
 )
 
 type freebsdDataplane struct {
@@ -68,7 +73,7 @@ func (d *freebsdDataplane) DoNetworking(
 
 	d.logger.Infof("Setting the host side veth name to %s", hostVethName)
 
-	hostNlHandle, err := netlink.NewHandle(syscall.NETLINK_ROUTE)
+	hostNlHandle, err := netlink.NewHandle(SYSCALL_NETLINK_ROUTE)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create host netlink handle: %v", err)
 	}

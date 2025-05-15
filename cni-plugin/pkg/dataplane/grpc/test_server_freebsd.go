@@ -25,7 +25,8 @@ import (
 	"github.com/oss-fun/souma-cni-plugins/pkg/ns"
 	"github.com/gogo/protobuf/proto"
 	log "github.com/sirupsen/logrus"
-	"github.com/vishvananda/netlink"
+	//"github.com/vishvananda/netlink"
+	"github.com/oss-fun/netlink"
 	"google.golang.org/grpc"
 
 	pb "github.com/projectcalico/calico/cni-plugin/pkg/dataplane/grpc/proto"
