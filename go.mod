@@ -55,7 +55,7 @@ require (
 	github.com/onsi/ginkgo/v2 v2.17.1
 	github.com/onsi/gomega v1.32.0
 	github.com/oss-fun/netlink v0.0.0-20250428125919-eb1fe73a7bd3
-	github.com/oss-fun/souma-cni-plugins v0.0.0-20250430075121-5735053f1a44
+	github.com/oss-fun/plugins v0.0.0-20250516082646-de2c1021e213
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/profile v1.7.0
@@ -168,6 +168,7 @@ require (
 	github.com/felixge/fgprof v0.9.3 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/ghodss/yaml v1.0.0 // indirect
+	github.com/gizahNL/gojail v0.0.1 // indirect
 	github.com/go-errors/errors v1.4.2 // indirect
 	github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect

@@ -20,12 +20,10 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/containernetworking/plugins/pkg/ip"
-	//"github.com/containernetworking/plugins/pkg/ns"
-	"github.com/oss-fun/souma-cni-plugins/pkg/ns"
+	"github.com/oss-fun/plugins/pkg/ip"
+	"github.com/oss-fun/plugins/pkg/ns"
 	"github.com/gogo/protobuf/proto"
 	log "github.com/sirupsen/logrus"
-	//"github.com/vishvananda/netlink"
 	"github.com/oss-fun/netlink"
 	"google.golang.org/grpc"
 

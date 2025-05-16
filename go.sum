@@ -282,6 +282,8 @@ github.com/fsnotify/fsnotify v1.7.0 h1:8JEhPFa5W2WU7YfeZzPNqzMP6Lwt7L2715Ggo0nos
 github.com/fsnotify/fsnotify v1.7.0/go.mod h1:40Bi/Hjc2AVfZrqy+aj+yEI+/bRxZnMJyTJwOpGvigM=
 github.com/ghodss/yaml v1.0.0 h1:wQHKEahhL6wmXdzwWG11gIVCkOv05bNOh+Rxn0yngAk=
 github.com/ghodss/yaml v1.0.0/go.mod h1:4dBDuWmgqj2HViK6kFavaiC9ZROes6MMH2rRYeMEF04=
+github.com/gizahNL/gojail v0.0.1 h1:N01XvJ1HpqvmyG438aHHeIqY8L3zMnmmXrMsmxi7MqQ=
+github.com/gizahNL/gojail v0.0.1/go.mod h1:6CTUb3dkzRs9XXaf0cooERJN+vYK2AGgF+qhH4B8bt4=
 github.com/go-errors/errors v1.0.1/go.mod h1:f4zRHt4oKfwPJE5k8C9vpYG+aDHdBFUsgrm6/TyX73Q=
 github.com/go-errors/errors v1.4.2 h1:J6MZopCL4uSllY1OfXM374weqZFFItUbrImctkmUxIA=
 github.com/go-errors/errors v1.4.2/go.mod h1:sIVyrIiJhuEF+Pj9Ebtd6P/rEYROXFi3BopGUQ5a5Og=
@@ -671,8 +673,8 @@ github.com/opencontainers/selinux v1.10.1 h1:09LIPVRP3uuZGQvgR+SgMSNBd1Eb3vlRbGq
 github.com/opencontainers/selinux v1.10.1/go.mod h1:2i0OySw99QjzBBQByd1Gr9gSjvuho1lHsJxIJ3gGbJI=
 github.com/oss-fun/netlink v0.0.0-20250428125919-eb1fe73a7bd3 h1:jTBWXrq5wtayGIx3PtFemgKeSpQprM1Z8adUcdHi2tc=
 github.com/oss-fun/netlink v0.0.0-20250428125919-eb1fe73a7bd3/go.mod h1:LqJd8yWUAJrNWPdPQAMhjFLtoAKFI6ZxDp9XwsEZ1kc=
-github.com/oss-fun/souma-cni-plugins v0.0.0-20250430075121-5735053f1a44 h1:tK3Z5g4c3Uy/lwk3qNqpeRIr2HFZNw0d+8XXAKRIW8g=
-github.com/oss-fun/souma-cni-plugins v0.0.0-20250430075121-5735053f1a44/go.mod h1:AQnlk+McBNlhURSpAXJ+Z7a8C2WdJCtuXjmXYKKt+QA=
+github.com/oss-fun/plugins v0.0.0-20250516082646-de2c1021e213 h1:5w5dFiPsmvWmoT8fh7ixImtVzOBHVRzCkyhmyEZYc48=
+github.com/oss-fun/plugins v0.0.0-20250516082646-de2c1021e213/go.mod h1:pH2sQ43tuk2wX9fGfHyq75LuKJ+DxN8Cnz0Y2/XxoEw=
 github.com/oss-fun/vnet v0.0.0-20250315043324-63ed7f6e848a h1:YKCCKMC6RNrxOck/nVAURClHDSWwpcg4bruon2odZQ0=
 github.com/oss-fun/vnet v0.0.0-20250315043324-63ed7f6e848a/go.mod h1:vPPSuJlByLyy5YM+A/y1+lX1VG/abdgxSX0KuW9nRUU=
 github.com/patrickmn/go-cache v2.1.0+incompatible h1:HRMgzkcYKYpi3C8ajMPV8OFXaaRUnok+kx1WdO15EQc=
