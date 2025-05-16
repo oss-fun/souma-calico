@@ -42,7 +42,7 @@ import (
 
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
-	"github.com/vishvananda/netlink"
+	"github.com/oss-fun/netlink"
 )
 
 // GetResultForCurrent takes the output with cniVersion and returns the Result in cniv1.Result format.
