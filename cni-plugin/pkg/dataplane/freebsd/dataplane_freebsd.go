@@ -46,7 +46,7 @@ type freebsdDataplane struct {
 	logger            *logrus.Entry
 }
 
-func NewfreebsdDataplane(conf types.NetConf, logger *logrus.Entry) *freebsdDataplane {
+func NewFreeBSDDataplane(conf types.NetConf, logger *logrus.Entry) *freebsdDataplane {
 	return &freebsdDataplane{
 		allowIPForwarding: conf.ContainerSettings.AllowIPForwarding,
 		mtu:               conf.MTU,
