@@ -23,6 +23,10 @@ import (
 	"os/exec"
 )
 
+const (
+	EthtoolRxGRO = "rx-gro"
+)
+
 func EthtoolTXOff(name string) error {
 	cmd := exec.Command("ifconfig", name, "txcsum")
 	out, err := cmd.CombinedOutput()

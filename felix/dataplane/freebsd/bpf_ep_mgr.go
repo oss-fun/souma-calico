@@ -45,7 +45,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/oss-fun/netlink"
 	"golang.org/x/sync/semaphore"
-	"golang.org/x/sys/unix"
 
 	apiv3 "github.com/projectcalico/api/pkg/apis/projectcalico/v3"
 
@@ -83,6 +82,13 @@ import (
 	"github.com/projectcalico/calico/felix/iptables"
 	"github.com/projectcalico/calico/felix/proto"
 	"github.com/projectcalico/calico/felix/routetable"
+)
+
+const (
+	UNIX_RT_TABLE_MAIN           = 0x0
+	UNIX_BPF_PROG_TYPE_SCHED_CLS = 0x3 // FreeBSD not supported...
+	UNIX_BPF_PROG_TYPE_XDP       = 0x6 // FreeBSD not supported...
+	UNIX_BPF_MAP_TYPE_PROG_ARRAY = 0x3 // FreeBSD not supported...
 )
 
 const (
@@ -581,7 +587,7 @@ func newBPFEndpointManager(
 				nil, // deviceRouteSourceAddress
 				config.DeviceRouteProtocol,
 				true, // removeExternalRoutes
-				unix.RT_TABLE_MAIN,
+				UNIX_RT_TABLE_MAIN,
 				opReporter,
 				featureDetector,
 			)
@@ -594,7 +600,7 @@ func newBPFEndpointManager(
 				nil, // deviceRouteSourceAddress
 				config.DeviceRouteProtocol,
 				true, // removeExternalRoutes
-				unix.RT_TABLE_MAIN,
+				UNIX_RT_TABLE_MAIN,
 				opReporter,
 				featureDetector,
 			)
@@ -3575,7 +3581,7 @@ func (m *bpfEndpointManager) loadTCLogFilter(ap *tc.AttachPoint) (fileDescriptor
 	}
 
 	fd, err := bpf.LoadBPFProgramFromInsns(logFilter, "calico_log_filter",
-		"Apache-2.0", uint32(unix.BPF_PROG_TYPE_SCHED_CLS))
+		"Apache-2.0", uint32(UNIX_BPF_PROG_TYPE_SCHED_CLS))
 
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to load BPF log filter program: %w", err)
@@ -3648,9 +3654,9 @@ func (m *bpfEndpointManager) loadPolicyProgram(
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to generate policy bytecode v%v: %w", ipFamily, err)
 	}
-	progType := unix.BPF_PROG_TYPE_SCHED_CLS
+	progType := UNIX_BPF_PROG_TYPE_SCHED_CLS
 	if rules.ForXDP {
-		progType = unix.BPF_PROG_TYPE_XDP
+		progType = UNIX_BPF_PROG_TYPE_XDP
 	}
 
 	progFDs := make([]fileDescriptor, 0, len(programs))
@@ -3828,7 +3834,7 @@ func FindJumpMap(progID int, ifaceName string) (mapFD maps.FD, err error) {
 			}
 			return 0, fmt.Errorf("failed to get map info: %w", err)
 		}
-		if mapInfo.Type == unix.BPF_MAP_TYPE_PROG_ARRAY {
+		if mapInfo.Type == UNIX_BPF_MAP_TYPE_PROG_ARRAY {
 			logCtx.WithField("fd", mapFD).Debug("Found jump map")
 			return mapFD, nil
 		}

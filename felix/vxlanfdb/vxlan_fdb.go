@@ -32,6 +32,12 @@ import (
 	"github.com/projectcalico/calico/felix/netlinkshim/handlemgr"
 )
 
+const (
+	UNIX_RTN_UNICAST   = 0x1
+	UNIX_AF_BRIDGE     = 0x7 // FreeBSD not supported...
+	UNIX_NUD_PERMANENT = 0x80
+)
+
 type VTEP struct {
 	// HostIP is the remote node's real IP address; the IP that we send the
 	// VXLAN packets to.
@@ -207,7 +213,7 @@ func (f *VXLANFDB) Apply() error {
 				Family:       f.family,
 				LinkIndex:    f.ifIndex,
 				State:        netlink.NUD_PERMANENT,
-				Type:         unix.RTN_UNICAST,
+				Type:         UNIX_RTN_UNICAST,
 				IP:           mapping.IP.AsNetIP(),
 				HardwareAddr: mapping.MAC,
 			}
@@ -217,7 +223,7 @@ func (f *VXLANFDB) Apply() error {
 	f.applyFamily(nl, "FDB", f.fdbEntries,
 		func(mapping ipMACMapping) *netlink.Neigh {
 			return &netlink.Neigh{
-				Family:       unix.AF_BRIDGE,
+				Family:       UNIX_AF_BRIDGE,
 				LinkIndex:    f.ifIndex,
 				State:        netlink.NUD_PERMANENT,
 				Flags:        netlink.NTF_SELF,
@@ -309,7 +315,7 @@ func (f *VXLANFDB) resync(nl netlinkshim.Interface) error {
 	if err != nil {
 		return err
 	}
-	err = f.resyncFamily(nl, "FDB", unix.AF_BRIDGE, f.fdbEntries)
+	err = f.resyncFamily(nl, "FDB", UNIX_AF_BRIDGE, f.fdbEntries)
 	if err != nil {
 		return err
 	}
@@ -337,7 +343,7 @@ func (f *VXLANFDB) resyncFamily(
 				// Kernel creates transient entries with no MAC, ignore
 				continue
 			}
-			if n.State&unix.NUD_PERMANENT == 0 {
+			if n.State&UNIX_NUD_PERMANENT == 0 {
 				// We only manage static entries so ignore this one.
 				continue
 			}

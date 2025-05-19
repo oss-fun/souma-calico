@@ -23,7 +23,6 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
-	"github.com/oss-fun/netlink/nl"
 	"github.com/oss-fun/netlink"
 	"golang.org/x/sys/unix"
 

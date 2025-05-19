@@ -17,17 +17,20 @@ package ifacemonitor
 import (
 	"context"
 	"net"
-	"syscall"
 	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/oss-fun/netlink"
-	"golang.org/x/sys/unix"
 
 	"github.com/projectcalico/calico/felix/timeshim"
 )
 
 const FlapDampingDelay = 100 * time.Millisecond
+
+const (
+	SYSCALL_RTM_NEWLINK = 0x10
+	UNIX_RTM_NEWROUTE   = 0x18
+)
 
 type updateFilter struct {
 	Time timeshim.Interface
@@ -86,7 +89,7 @@ mainLoop:
 				return
 			}
 			idx := int(linkUpd.Index)
-			linkIsUp := linkUpd.Header.Type == syscall.RTM_NEWLINK && LinkIsOperUp(linkUpd.Link)
+			linkIsUp := linkUpd.Header.Type == SYSCALL_RTM_NEWLINK && LinkIsOperUp(linkUpd.Link)
 			var delay time.Duration
 			if linkIsUp {
 				if len(updatesByIfaceIdx[idx]) == 0 {
@@ -126,7 +129,7 @@ mainLoop:
 			oldUpds := updatesByIfaceIdx[idx]
 
 			var readyToSendTime time.Time
-			if routeUpd.Type == unix.RTM_NEWROUTE {
+			if routeUpd.Type == UNIX_RTM_NEWROUTE {
 				logrus.WithField("addr", routeUpd.Dst).Debug("FilterUpdates: got address ADD")
 				if len(oldUpds) == 0 {
 					// This is an add for a new IP and there's nothing else in the queue for this interface.
@@ -241,5 +244,5 @@ func ipNetsEqual(a *net.IPNet, b *net.IPNet) bool {
 }
 
 func routeIsLocalUnicast(route netlink.Route) bool {
-	return route.Type == unix.RTN_LOCAL
+	return route.Type == UNIX_RTN_LOCAL
 }

@@ -29,7 +29,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/oss-fun/netlink"
-	"golang.org/x/sys/unix"
 
 	"github.com/projectcalico/calico/felix/dataplane/common"
 	"github.com/projectcalico/calico/felix/environment"
@@ -42,6 +41,11 @@ import (
 	"github.com/projectcalico/calico/felix/rules"
 	"github.com/projectcalico/calico/felix/vxlanfdb"
 	"github.com/projectcalico/calico/libcalico-go/lib/set"
+)
+
+const (
+	SYSCALL_NETLINK_ROUTE = 0x0
+	SYSCALL_RTPROT_BOOT   = 0x3
 )
 
 const (
@@ -126,10 +130,10 @@ func newVXLANManager(
 	ipVersion uint8,
 	featureDetector environment.FeatureDetectorIface,
 ) *vxlanManager {
-	nlHandle, _ := netlink.NewHandle(syscall.NETLINK_ROUTE)
+	nlHandle, _ := netlink.NewHandle(SYSCALL_NETLINK_ROUTE)
 
 	blackHoleProto := defaultVXLANProto
-	if dpConfig.DeviceRouteProtocol != syscall.RTPROT_BOOT {
+	if dpConfig.DeviceRouteProtocol != SYSCALL_RTPROT_BOOT {
 		blackHoleProto = dpConfig.DeviceRouteProtocol
 	}
 
@@ -144,7 +148,7 @@ func newVXLANManager(
 				dpConfig.DeviceRouteSourceAddress,
 				blackHoleProto,
 				false,
-				unix.RT_TABLE_MAIN,
+				UNIX_RT_TABLE_MAIN,
 				opRecorder,
 				featureDetector,
 			)
@@ -156,7 +160,7 @@ func newVXLANManager(
 				dpConfig.DeviceRouteSourceAddressIPv6,
 				blackHoleProto,
 				false,
-				unix.RT_TABLE_MAIN,
+				UNIX_RT_TABLE_MAIN,
 				opRecorder,
 				featureDetector,
 			)
@@ -184,7 +188,7 @@ func newVXLANManager(
 			removeExternalRoutes bool,
 		) routetable.RouteTableInterface {
 			return routetable.New(interfaceRegexes, ipVersion, netlinkTimeout,
-				deviceRouteSourceAddress, deviceRouteProtocol, removeExternalRoutes, unix.RT_TABLE_MAIN,
+				deviceRouteSourceAddress, deviceRouteProtocol, removeExternalRoutes, UNIX_RT_TABLE_MAIN,
 				opRecorder, featureDetector,
 			)
 		},
@@ -203,7 +207,7 @@ func newVXLANManagerWithShims(
 		deviceRouteSourceAddress net.IP, deviceRouteProtocol netlink.RouteProtocol, removeExternalRoutes bool) routetable.RouteTableInterface,
 ) *vxlanManager {
 	noEncapProtocol := defaultVXLANProto
-	if dpConfig.DeviceRouteProtocol != syscall.RTPROT_BOOT {
+	if dpConfig.DeviceRouteProtocol != SYSCALL_RTPROT_BOOT {
 		noEncapProtocol = dpConfig.DeviceRouteProtocol
 	}
 

@@ -21,7 +21,6 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -39,6 +38,17 @@ import (
 	"github.com/projectcalico/calico/felix/timeshim"
 	cprometheus "github.com/projectcalico/calico/libcalico-go/lib/prometheus"
 	"github.com/projectcalico/calico/libcalico-go/lib/set"
+)
+
+const (
+	SYSCALL_RTN_UNICAST     = 0x1
+	SYSCALL_RTN_LOCAL       = 0x2 // FreeBSD not supported...
+	SYSCALL_RTN_BLACKHOLE   = 0x6
+	SYSCALL_RTN_UNREACHABLE = 0x7
+	SYSCALL_RTN_PROHIBIT    = 0x8
+	SYSCALL_RTN_THROW       = 0x9 // FreeBSD not supported...
+	SYSCALL_RTNH_F_ONLINK   = 0x4 // FreeBSD not supported...
+	UNIX_RT_TABLE_MAIN      = 0x0
 )
 
 var (
@@ -107,17 +117,17 @@ func (t Target) Equal(t2 Target) bool {
 func (t Target) RouteType() int {
 	switch t.Type {
 	case TargetTypeLocal:
-		return syscall.RTN_LOCAL
+		return SYSCALL_RTN_LOCAL
 	case TargetTypeThrow:
-		return syscall.RTN_THROW
+		return SYSCALL_RTN_THROW
 	case TargetTypeBlackhole:
-		return syscall.RTN_BLACKHOLE
+		return SYSCALL_RTN_BLACKHOLE
 	case TargetTypeProhibit:
-		return syscall.RTN_PROHIBIT
+		return SYSCALL_RTN_PROHIBIT
 	case TargetTypeUnreachable:
-		return syscall.RTN_UNREACHABLE
+		return SYSCALL_RTN_UNREACHABLE
 	default:
-		return syscall.RTN_UNICAST
+		return SYSCALL_RTN_UNICAST
 	}
 }
 
@@ -149,7 +159,7 @@ func (t Target) RouteScope() netlink.Scope {
 func (t Target) Flags() netlink.NextHopFlag {
 	switch t.Type {
 	case TargetTypeVXLAN, TargetTypeNoEncap, TargetTypeOnLink:
-		return syscall.RTNH_F_ONLINK
+		return SYSCALL_RTNH_F_ONLINK
 	default:
 		return 0
 	}
@@ -283,7 +293,7 @@ func NewWithShims(
 		// If we set route.Table to 0, what we actually get is a route in RT_TABLE_MAIN.  However,
 		// RouteListFiltered is much more efficient if we give it the "real" table number.
 		log.Debug("RouteTable created with unspecified table; defaulting to unix.RT_TABLE_MAIN.")
-		tableIndex = unix.RT_TABLE_MAIN
+		tableIndex = UNIX_RT_TABLE_MAIN
 	}
 
 	logCxt := log.WithFields(log.Fields{
@@ -785,7 +795,7 @@ func (r *RouteTable) createL3Route(linkAttrs *netlink.LinkAttrs, target Target) 
 
 	// If this is an IPv6 blackhole or throw route, set the dev to lo. This matches
 	// what the kernel does, and ensures we properly query programmed routes.
-	if r.ipVersion == 6 && (target.RouteType() == syscall.RTN_BLACKHOLE || target.RouteType() == syscall.RTN_THROW) {
+	if r.ipVersion == 6 && (target.RouteType() == SYSCALL_RTN_BLACKHOLE || target.RouteType() == SYSCALL_RTN_THROW) {
 		route.LinkIndex = 1
 	}
 
@@ -801,7 +811,7 @@ func (r *RouteTable) createL3Route(linkAttrs *netlink.LinkAttrs, target Target) 
 
 	if target.Type == TargetTypeVXLAN || target.Type == TargetTypeNoEncap {
 		route.Scope = netlink.SCOPE_UNIVERSE
-		route.SetFlag(syscall.RTNH_F_ONLINK)
+		route.SetFlag(SYSCALL_RTNH_F_ONLINK)
 	}
 
 	return route
