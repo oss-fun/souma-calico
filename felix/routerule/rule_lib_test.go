@@ -20,7 +20,7 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
-	"github.com/vishvananda/netlink"
+	"github.com/oss-fun/netlink"
 	"golang.org/x/sys/unix"
 )
 

@@ -29,7 +29,7 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/sirupsen/logrus"
 
-	"github.com/vishvananda/netlink"
+	"github.com/oss-fun/netlink"
 
 	api "github.com/projectcalico/api/pkg/apis/projectcalico/v3"
 

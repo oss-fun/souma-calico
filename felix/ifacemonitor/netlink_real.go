@@ -19,7 +19,7 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
-	"github.com/vishvananda/netlink"
+	"github.com/oss-fun/netlink"
 	"golang.org/x/sys/unix"
 
 	"github.com/projectcalico/calico/felix/environment"

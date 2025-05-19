@@ -35,7 +35,7 @@ import (
 	"github.com/docopt/docopt-go"
 	"github.com/ishidawataru/sctp"
 	log "github.com/sirupsen/logrus"
-	"github.com/vishvananda/netlink"
+	"github.com/oss-fun/netlink"
 )
 
 const usage = `test-workload, test workload for Felix FV testing.

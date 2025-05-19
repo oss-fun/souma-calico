@@ -19,7 +19,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/vishvananda/netlink"
+	"github.com/oss-fun/netlink"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
