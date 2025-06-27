@@ -25,12 +25,12 @@ import (
 
 	"github.com/projectcalico/calico/felix/config"
 	"github.com/projectcalico/calico/felix/ipsets"
-	"github.com/projectcalico/calico/felix/iptables"
+	"github.com/projectcalico/calico/felix/ipfw"
 	"github.com/projectcalico/calico/felix/proto"
 )
 
 const (
-	// ChainNamePrefix is a prefix used for all our iptables chain names.  We include a '-' at
+	// ChainNamePrefix is a prefix used for all our ipfw chain names.  We include a '-' at
 	// the end to reduce clashes with other apps.  Our OpenStack DHCP agent uses prefix
 	// 'calico-dhcp-', for example.
 	ChainNamePrefix = "cali-"
@@ -116,7 +116,7 @@ const (
 	// Python felix used to insert a masquerade rule directly into the
 	// POSTROUTING chain.
 	//
-	// Note: this regex depends on the output format of iptables-save so,
+	// Note: this regex depends on the output format of ipfw-save so,
 	// where possible, it's best to match only on part of the rule that
 	// we're sure can't change (such as the ipset name in the masquerade
 	// rule).
@@ -181,29 +181,29 @@ var (
 )
 
 type RuleRenderer interface {
-	StaticFilterTableChains(ipVersion uint8) []*iptables.Chain
-	StaticNATTableChains(ipVersion uint8) []*iptables.Chain
-	StaticNATPostroutingChains(ipVersion uint8) []*iptables.Chain
-	StaticRawTableChains(ipVersion uint8) []*iptables.Chain
-	StaticBPFModeRawChains(ipVersion uint8, wgEncryptHost, disableConntrack bool) []*iptables.Chain
-	StaticMangleTableChains(ipVersion uint8) []*iptables.Chain
-	StaticFilterForwardAppendRules() []iptables.Rule
+	StaticFilterTableChains(ipVersion uint8) []*ipfw.Chain
+	StaticNATTableChains(ipVersion uint8) []*ipfw.Chain
+	StaticNATPostroutingChains(ipVersion uint8) []*ipfw.Chain
+	StaticRawTableChains(ipVersion uint8) []*ipfw.Chain
+	StaticBPFModeRawChains(ipVersion uint8, wgEncryptHost, disableConntrack bool) []*ipfw.Chain
+	StaticMangleTableChains(ipVersion uint8) []*ipfw.Chain
+	StaticFilterForwardAppendRules() []ipfw.Rule
 
-	WorkloadDispatchChains(map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint) []*iptables.Chain
-	WorkloadEndpointToIptablesChains(ifaceName string, epMarkMapper EndpointMarkMapper, adminUp bool, ingressPolicies []*PolicyGroup, egressPolicies []*PolicyGroup, profileIDs []string) []*iptables.Chain
-	PolicyGroupToIptablesChains(group *PolicyGroup) []*iptables.Chain
+	WorkloadDispatchChains(map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint) []*ipfw.Chain
+	WorkloadEndpointToipfwChains(ifaceName string, epMarkMapper EndpointMarkMapper, adminUp bool, ingressPolicies []*PolicyGroup, egressPolicies []*PolicyGroup, profileIDs []string) []*ipfw.Chain
+	PolicyGroupToipfwChains(group *PolicyGroup) []*ipfw.Chain
 
-	WorkloadInterfaceAllowChains(endpoints map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint) []*iptables.Chain
+	WorkloadInterfaceAllowChains(endpoints map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint) []*ipfw.Chain
 
 	EndpointMarkDispatchChains(
 		epMarkMapper EndpointMarkMapper,
 		wlEndpoints map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint,
 		hepEndpoints map[string]proto.HostEndpointID,
-	) []*iptables.Chain
+	) []*ipfw.Chain
 
-	HostDispatchChains(map[string]proto.HostEndpointID, string, bool) []*iptables.Chain
-	FromHostDispatchChains(map[string]proto.HostEndpointID, string) []*iptables.Chain
-	ToHostDispatchChains(map[string]proto.HostEndpointID, string) []*iptables.Chain
+	HostDispatchChains(map[string]proto.HostEndpointID, string, bool) []*ipfw.Chain
+	FromHostDispatchChains(map[string]proto.HostEndpointID, string) []*ipfw.Chain
+	ToHostDispatchChains(map[string]proto.HostEndpointID, string) []*ipfw.Chain
 	HostEndpointToFilterChains(
 		ifaceName string,
 		epMarkMapper EndpointMarkMapper,
@@ -212,53 +212,53 @@ type RuleRenderer interface {
 		ingressForwardPolicies []*PolicyGroup,
 		egressForwardPolicies []*PolicyGroup,
 		profileIDs []string,
-	) []*iptables.Chain
+	) []*ipfw.Chain
 	HostEndpointToMangleEgressChains(
 		ifaceName string,
 		egressPolicies []*PolicyGroup,
 		profileIDs []string,
-	) []*iptables.Chain
+	) []*ipfw.Chain
 	HostEndpointToRawEgressChain(
 		ifaceName string,
 		egressPolicies []*PolicyGroup,
-	) *iptables.Chain
+	) *ipfw.Chain
 	HostEndpointToRawChains(
 		ifaceName string,
 		ingressPolicies []*PolicyGroup,
 		egressPolicies []*PolicyGroup,
-	) []*iptables.Chain
+	) []*ipfw.Chain
 	HostEndpointToMangleIngressChains(
 		ifaceName string,
 		preDNATPolicies []*PolicyGroup,
-	) []*iptables.Chain
+	) []*ipfw.Chain
 
-	PolicyToIptablesChains(policyID *proto.PolicyID, policy *proto.Policy, ipVersion uint8) []*iptables.Chain
-	ProfileToIptablesChains(profileID *proto.ProfileID, policy *proto.Profile, ipVersion uint8) (inbound, outbound *iptables.Chain)
-	ProtoRuleToIptablesRules(pRule *proto.Rule, ipVersion uint8) []iptables.Rule
+	PolicyToipfwChains(policyID *proto.PolicyID, policy *proto.Policy, ipVersion uint8) []*ipfw.Chain
+	ProfileToipfwChains(profileID *proto.ProfileID, policy *proto.Profile, ipVersion uint8) (inbound, outbound *ipfw.Chain)
+	ProtoRuleToipfwRules(pRule *proto.Rule, ipVersion uint8) []ipfw.Rule
 
-	MakeNatOutgoingRule(protocol string, action iptables.Action, ipVersion uint8) iptables.Rule
-	NATOutgoingChain(active bool, ipVersion uint8) *iptables.Chain
+	MakeNatOutgoingRule(protocol string, action ipfw.Action, ipVersion uint8) ipfw.Rule
+	NATOutgoingChain(active bool, ipVersion uint8) *ipfw.Chain
 
-	DNATsToIptablesChains(dnats map[string]string) []*iptables.Chain
-	SNATsToIptablesChains(snats map[string]string) []*iptables.Chain
-	BlockedCIDRsToIptablesChains(cidrs []string, ipVersion uint8) []*iptables.Chain
+	DNATsToipfwChains(dnats map[string]string) []*ipfw.Chain
+	SNATsToipfwChains(snats map[string]string) []*ipfw.Chain
+	BlockedCIDRsToipfwChains(cidrs []string, ipVersion uint8) []*ipfw.Chain
 
-	WireguardIncomingMarkChain() *iptables.Chain
+	WireguardIncomingMarkChain() *ipfw.Chain
 
-	IptablesFilterDenyAction() iptables.Action
+	ipfwFilterDenyAction() ipfw.Action
 }
 
 type DefaultRuleRenderer struct {
 	Config
-	inputAcceptActions       []iptables.Action
-	filterAllowAction        iptables.Action
-	mangleAllowAction        iptables.Action
-	blockCIDRAction          iptables.Action
-	iptablesFilterDenyAction iptables.Action
+	inputAllowActions       []ipfw.Action
+	filterAllowAction        ipfw.Action
+	mangleAllowAction        ipfw.Action
+	blockCIDRAction          ipfw.Action
+	ipfwFilterDenyAction ipfw.Action
 }
 
-func (r *DefaultRuleRenderer) IptablesFilterDenyAction() iptables.Action {
-	return r.iptablesFilterDenyAction
+func (r *DefaultRuleRenderer) ipfwFilterDenyAction() ipfw.Action {
+	return r.ipfwFilterDenyAction
 }
 
 func (r *DefaultRuleRenderer) ipSetConfig(ipVersion uint8) *ipsets.IPVersionConfig {
@@ -278,14 +278,14 @@ type Config struct {
 
 	WorkloadIfacePrefixes []string
 
-	IptablesMarkAccept   uint32
-	IptablesMarkPass     uint32
-	IptablesMarkScratch0 uint32
-	IptablesMarkScratch1 uint32
-	IptablesMarkEndpoint uint32
-	// IptablesMarkNonCaliEndpoint is an endpoint mark which is reserved
+	ipfwMarkAccept   uint32
+	ipfwMarkPass     uint32
+	ipfwMarkScratch0 uint32
+	ipfwMarkScratch1 uint32
+	ipfwMarkEndpoint uint32
+	// ipfwMarkNonCaliEndpoint is an endpoint mark which is reserved
 	// to mark non-calico (workload or host) endpoint.
-	IptablesMarkNonCaliEndpoint uint32
+	ipfwMarkNonCaliEndpoint uint32
 
 	KubeNodePortRanges     []numorstring.Port
 	KubeIPVSSupportEnabled bool
@@ -315,17 +315,17 @@ type Config struct {
 	WireguardEnabledV6          bool
 	WireguardInterfaceName      string
 	WireguardInterfaceNameV6    string
-	WireguardIptablesMark       uint32
+	WireguardipfwMark       uint32
 	WireguardListeningPort      int
 	WireguardListeningPortV6    int
 	WireguardEncryptHostTraffic bool
 	RouteSource                 string
 
-	IptablesLogPrefix         string
+	ipfwLogPrefix         string
 	EndpointToHostAction      string
-	IptablesFilterAllowAction string
-	IptablesMangleAllowAction string
-	IptablesFilterDenyAction  string
+	ipfwFilterAllowAction string
+	ipfwMangleAllowAction string
+	ipfwFilterDenyAction  string
 
 	FailsafeInboundHostPorts  []config.ProtoPort
 	FailsafeOutboundHostPorts []config.ProtoPort
@@ -333,7 +333,7 @@ type Config struct {
 	DisableConntrackInvalid bool
 
 	NATPortRange                       numorstring.Port
-	IptablesNATOutgoingInterfaceFilter string
+	ipfwNATOutgoingInterfaceFilter string
 
 	NATOutgoingAddress             net.IP
 	BPFEnabled                     bool
@@ -342,14 +342,14 @@ type Config struct {
 }
 
 var unusedBitsInBPFMode = map[string]bool{
-	"IptablesMarkPass":            true,
-	"IptablesMarkScratch1":        true,
-	"IptablesMarkEndpoint":        true,
-	"IptablesMarkNonCaliEndpoint": true,
+	"ipfwMarkPass":            true,
+	"ipfwMarkScratch1":        true,
+	"ipfwMarkEndpoint":        true,
+	"ipfwMarkNonCaliEndpoint": true,
 }
 
 func (c *Config) validate() {
-	// Scan for unset iptables mark bits.  We use reflection so that we have a hope of catching
+	// Scan for unset ipfw mark bits.  We use reflection so that we have a hope of catching
 	// newly-added fields.
 	myValue := reflect.ValueOf(c).Elem()
 	myType := myValue.Type()
@@ -357,7 +357,7 @@ func (c *Config) validate() {
 	usedBits := uint32(0)
 	for i := 0; i < myValue.NumField(); i++ {
 		fieldName := myType.Field(i).Name
-		if strings.HasPrefix(fieldName, "IptablesMark") && fieldName != "IptablesMarkNonCaliEndpoint" {
+		if strings.HasPrefix(fieldName, "ipfwMark") && fieldName != "ipfwMarkNonCaliEndpoint" {
 			if c.BPFEnabled && unusedBitsInBPFMode[fieldName] {
 				log.WithField("field", fieldName).Debug("Ignoring unused field in BPF mode.")
 				continue
@@ -365,11 +365,11 @@ func (c *Config) validate() {
 			bits := myValue.Field(i).Interface().(uint32)
 			if bits == 0 {
 				log.WithField("field", fieldName).Panic(
-					"IptablesMarkXXX field not set.")
+					"ipfwMarkXXX field not set.")
 			}
 			if usedBits&bits > 0 {
 				log.WithField("field", fieldName).Panic(
-					"IptablesMarkXXX field overlapped with another's bits.")
+					"ipfwMarkXXX field overlapped with another's bits.")
 			}
 			usedBits |= bits
 			found++
@@ -377,7 +377,7 @@ func (c *Config) validate() {
 	}
 	if found == 0 {
 		// Check the reflection found something we were expecting.
-		log.Panic("Didn't find any IptablesMarkXXX fields.")
+		log.Panic("Didn't find any ipfwMarkXXX fields.")
 	}
 }
 
@@ -386,49 +386,49 @@ func NewRenderer(config Config) RuleRenderer {
 	config.validate()
 
 	// First, what should we do when packets are not accepted.
-	var iptfwFilterDenyAction iptables.Action
+	var iptfwFilterDenyAction ipfw.Action
 	log.Info("packets that are not passed by any policy or profile will be dropped.")
-	iptablesFilterDenyAction = iptables.DropAction{}
+	ipfwFilterDenyAction = ipfw.DenyAction{}
 
 	// Convert configured actions to rule slices.
 	// First, what should we do with packets that come from workloads to the host itself.
-	var inputAcceptActions []iptables.Action
+	var inputAllowActions []ipfw.Action
 	switch config.EndpointToHostAction {
 	case "DROP":
 		log.Info("Workload to host packets will be dropped.")
-		inputAcceptActions = []iptables.Action{iptables.DropAction{}}
+		inputAllowActions = []ipfw.Action{ipfw.DwnyAction{}}
 	case "ACCEPT":
 		log.Info("Workload to host packets will be accepted.")
-		inputAcceptActions = []iptables.Action{iptables.AcceptAction{}}
+		inputAllowActions = []ipfw.Action{ipfw.AllowAction{}}
 	default:
 		log.Info("Workload to host packets will be returned to INPUT chain.")
-		inputAcceptActions = []iptables.Action{iptables.ReturnAction{}}
+		inputAllowActions = []ipfw.Action{ipfw.ReturnAction{}}
 	}
 
 	// What should we do with packets that are accepted in the forwarding chain
-	var filterAllowAction, mangleAllowAction iptables.Action
+	var filterAllowAction, mangleAllowAction ipfw.Action
 	log.Info("filter table allowed packets will be accepted immediately.")
-	filterAllowAction = iptables.AcceptAction{}
+	filterAllowAction = ipfw.AllowAction{}
 
 	log.Info("mangle table allowed packets will be accepted immediately.")
-	mangleAllowAction = iptables.AcceptAction{}
+	mangleAllowAction = ipfw.AllowAction{}
 
 	// How should we block CIDRs for loop prevention?
-	var blockCIDRAction iptables.Action
+	var blockCIDRAction ipfw.Action
 	switch config.ServiceLoopPrevention {
 	case "Drop":
 		log.Info("Packets to unknown service IPs will be dropped")
-		blockCIDRAction = iptables.DropAction{}
+		blockCIDRAction = ipfw.DenyAction{}
 	default:
 		log.Info("Packets to unknown service IPs will be allowed to loop")
 	}
 
 	return &DefaultRuleRenderer{
-		Config:                   config,
-		inputAcceptActions:       inputAcceptActions,
-		filterAllowAction:        filterAllowAction,
-		mangleAllowAction:        mangleAllowAction,
-		blockCIDRAction:          blockCIDRAction,
-		iptablesFilterDenyAction: iptablesFilterDenyAction,
+		Config:               config,
+		inputAllowActions:    inputAcceptActions,
+		filterAllowAction:    filterAllowAction,
+		mangleAllowAction:    mangleAllowAction,
+		blockCIDRAction:      blockCIDRAction,
+		ipfwFilterDenyAction: ipfwFilterDenyAction,
 	}
 }
