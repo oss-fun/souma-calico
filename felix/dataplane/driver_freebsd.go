@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !windows
-
 package dataplane
 
 import (
@@ -65,7 +63,7 @@ func StartDataplaneDriver(configParams *config.Config,
 	}
 
 	if configParams.UseInternalDataplaneDriver {
-		log.Info("Using internal (linux) dataplane driver.")
+		log.Info("Using internal FreeBSD dataplane driver.")
 		// If kube ipvs interface is present, enable ipvs support.  In BPF mode, we bypass kube-proxy so IPVS
 		// is irrelevant.
 		kubeIPVSSupportEnabled := false
@@ -412,7 +410,7 @@ func StartDataplaneDriver(configParams *config.Config,
 }
 
 func SupportsBPF() error {
-	return bpf.SupportsBPFDataplane()
+	return fmt.Errorf("BPF dataplane is not supported on FreeBSD")
 }
 
 func ConfigurePrometheusMetrics(configParams *config.Config) {
