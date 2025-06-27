@@ -250,14 +250,14 @@ type RuleRenderer interface {
 
 type DefaultRuleRenderer struct {
 	Config
-	inputAllowActions       []ipfw.Action
-	filterAllowAction        ipfw.Action
-	mangleAllowAction        ipfw.Action
-	blockCIDRAction          ipfw.Action
+	inputAllowActions    []ipfw.Action
+	filterAllowAction    ipfw.Action
+	mangleAllowAction    ipfw.Action
+	blockCIDRAction      ipfw.Action
 	ipfwFilterDenyAction ipfw.Action
 }
 
-func (r *DefaultRuleRenderer) ipfwFilterDenyAction() ipfw.Action {
+func (r *DefaultRuleRenderer) IpfwFilterDenyAction() ipfw.Action {
 	return r.ipfwFilterDenyAction
 }
 

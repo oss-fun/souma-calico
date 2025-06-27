@@ -4,7 +4,7 @@ import (
 	"strings"
 	"strconv"
 
-	"github.com/projectcalico/calico/ipfw/cmdshim"
+	"github.com/projectcalico/calico/felix/ipfw/cmdshim"
 )
 
 type Rule struct {
