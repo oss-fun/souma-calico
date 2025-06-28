@@ -285,10 +285,7 @@ type Config struct {
 	ipfwMarkEndpoint uint32
 	// ipfwMarkNonCaliEndpoint is an endpoint mark which is reserved
 	// to mark non-calico (workload or host) endpoint.
-	ipfwMarkNonCaliEndpoint uint32
-
-	KubeNodePortRanges     []numorstring.Port
-	KubeIPVSSupportEnabled bool
+	ipfwTagNonCaliEndpoint []uint16
 
 	OpenStackMetadataIP          net.IP
 	OpenStackMetadataPort        uint16

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build !freebsd
+
 package intdataplane
 
 import (
@@ -369,14 +371,10 @@ const (
 )
 
 func NewIntDataplaneDriver(config Config) *InternalDataplane {
-	log.WithField("config", config).Info("Creating internal dataplane driver.")
-	ruleRenderer := config.RuleRendererOverride
-	if ruleRenderer == nil {
-		ruleRenderer = rules.NewRenderer(config.RulesConfig)
-	}
-	epMarkMapper := rules.NewEndpointMarkMapper(
-		config.RulesConfig.IptablesMarkEndpoint,
-		config.RulesConfig.IptablesMarkNonCaliEndpoint)
+	log.WithField("config", config).Info("Creating internal FreeBSD dataplane driver.")
+	ruleRenderer = rules.NewRenderer(config.RulesConfig)
+
+	epMarkMapper := rules.NewEndpointTagMapper(config.RulesConfig.TagNumNonCaliEndpoint)
 
 	// Auto-detect host MTU.
 	hostMTU, err := findHostMTU(config.MTUIfacePattern)
