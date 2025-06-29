@@ -147,21 +147,20 @@ type Config struct {
 
 	MaxIPSetSize int
 
-	RouteSyncDisabled              bool
-	IptablesBackend                string
-	IPSetsRefreshInterval          time.Duration
-	RouteRefreshInterval           time.Duration
-	DeviceRouteSourceAddress       net.IP
-	DeviceRouteSourceAddressIPv6   net.IP
-	DeviceRouteProtocol            netlink.RouteProtocol
-	RemoveExternalRoutes           bool
-	IptablesRefreshInterval        time.Duration
-	IptablesPostWriteCheckInterval time.Duration
-	IptablesInsertMode             string
-	IptablesLockFilePath           string
-	IptablesLockTimeout            time.Duration
-	IptablesLockProbeInterval      time.Duration
-	XDPRefreshInterval             time.Duration
+	RouteSyncDisabled            bool
+	IpfwBackend                  string
+	IPSetsRefreshInterval        time.Duration
+	RouteRefreshInterval         time.Duration
+	DeviceRouteSourceAddress     net.IP
+	DeviceRouteSourceAddressIPv6 net.IP
+	DeviceRouteProtocol          netlink.RouteProtocol
+	RemoveExternalRoutes         bool
+	IpfwRefreshInterval          time.Duration
+	IpfwPostWriteCheckInterval   time.Duration
+	IpfwLockFilePath             string
+	IpfwLockTimeout              time.Duration
+	IpfwLockProbeInterval        time.Duration
+	XDPRefreshInterval           time.Duration
 
 	FloatingIPsEnabled bool
 
@@ -225,8 +224,6 @@ type Config struct {
 	SidecarAccelerationEnabled         bool
 	ServiceLoopPrevention              string
 
-	LookPathOverride func(file string) (string, error)
-
 	KubeClientSet *kubernetes.Clientset
 
 	FeatureDetectOverrides map[string]string
@@ -282,12 +279,8 @@ type InternalDataplane struct {
 	fromDataplane           chan interface{}
 	sendDataplaneInSyncOnce sync.Once
 
-	allIptablesTables    []*iptables.Table
-	iptablesMangleTables []*iptables.Table
-	iptablesNATTables    []*iptables.Table
-	iptablesRawTables    []*iptables.Table
-	iptablesFilterTables []*iptables.Table
-	ipSets               []common.IPSetsDataplane
+	allIpfwRuleSets    []*ipfw.Table
+	ipSets             []common.IPSetsDataplane
 
 	ipipManager *ipipManager
 
@@ -407,34 +400,18 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 	dp.ifaceMonitor.AddrCallback = dp.onIfaceAddrsChange
 	dp.ifaceMonitor.InSyncCallback = dp.onIfaceInSync
 
-	backendMode := environment.DetectBackend(config.LookPathOverride, cmdshim.NewRealCmd, config.IptablesBackend)
+	backendMode := environment.DetectBackend()
 
 	// Most iptables tables need the same options.
-	iptablesOptions := iptables.TableOptions{
+	ipfwOptions := ipfw.RulesetOptions{
 		HistoricChainPrefixes: rules.AllHistoricChainNamePrefixes,
-		InsertMode:            config.IptablesInsertMode,
-		RefreshInterval:       config.IptablesRefreshInterval,
-		PostWriteInterval:     config.IptablesPostWriteCheckInterval,
-		LockTimeout:           config.IptablesLockTimeout,
-		LockProbeInterval:     config.IptablesLockProbeInterval,
+		RefreshInterval:       config.IpfwRefreshInterval,
+		PostWriteInterval:     config.IpfwPostWriteCheckInterval,
+		LockTimeout:           config.IpfwLockTimeout,
+		LockProbeInterval:     config.IpfwLockProbeInterval,
 		BackendMode:           backendMode,
-		LookPathOverride:      config.LookPathOverride,
 		OnStillAlive:          dp.reportHealth,
 		OpRecorder:            dp.loopSummarizer,
-	}
-
-	if config.BPFEnabled && config.BPFKubeProxyIptablesCleanupEnabled {
-		// If BPF-mode is enabled, clean up kube-proxy's rules too.
-		log.Info("BPF enabled, configuring iptables layer to clean up kube-proxy's rules.")
-		iptablesOptions.ExtraCleanupRegexPattern = rules.KubeProxyInsertRuleRegex
-		iptablesOptions.HistoricChainPrefixes = append(iptablesOptions.HistoricChainPrefixes, rules.KubeProxyChainPrefixes...)
-	}
-
-	if config.BPFEnabled && !config.BPFPolicyDebugEnabled {
-		err := os.RemoveAll(bpf.RuntimePolDir)
-		if err != nil && !os.IsNotExist(err) {
-			log.WithError(err).Info("Policy debug disabled but failed to remove the debug directory.  Ignoring.")
-		}
 	}
 
 	// However, the NAT tables need an extra cleanup regex.
