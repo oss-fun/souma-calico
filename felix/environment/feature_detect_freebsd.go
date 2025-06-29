@@ -31,7 +31,7 @@ import (
 
 	"github.com/projectcalico/calico/felix/netlinkshim"
 
-	"github.com/projectcalico/calico/felix/iptables/cmdshim"
+	"github.com/projectcalico/calico/felix/ipfw/cmdshim"
 )
 
 var (

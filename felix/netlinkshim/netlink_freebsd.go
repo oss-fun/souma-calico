@@ -46,10 +46,7 @@ type Interface interface {
 	NeighDel(a *netlink.Neigh) error
 }
 
-func NewRealNetlink() (Interface, error) {
-	/*	
+func NewRealNetlink() (Interface, error) {	
 	NETLINK_ROUTE := 0x0
 	return netlink.NewHandle(NETLINK_ROUTE)
-	*/
-	return nil, nil
 }
