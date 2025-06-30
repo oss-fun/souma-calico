@@ -36,27 +36,6 @@ import (
 
 var (
 	vXDotYDotZRegexp = regexp.MustCompile(`v(\d+\.\d+\.\d+)`)
-
-	// iptables versions:
-	// v1Dot4Dot7 is the oldest version we've ever supported.
-	v1Dot4Dot7 = MustParseVersion("1.4.7")
-	// v1Dot6Dot0 added --random-fully to SNAT.
-	v1Dot6Dot0 = MustParseVersion("1.6.0")
-	// v1Dot6Dot2 added --random-fully to MASQUERADE and the xtables lock to iptables-restore.
-	v1Dot6Dot2 = MustParseVersion("1.6.2")
-
-	// Linux kernel versions:
-	// v3Dot10Dot0 is the oldest version we support at time of writing.
-	v3Dot10Dot0 = MustParseVersion("3.10.0")
-	// v3Dot14Dot0 added the random-fully feature on the iptables interface.
-	v3Dot14Dot0 = MustParseVersion("3.14.0")
-	// v5Dot7Dot0 contains a fix for checksum offloading.
-	v5Dot7Dot0 = MustParseVersion("5.7.0")
-	// v5Dot14Dot0 is the fist kernel version that IPIP tunnels acts like other L3
-	// devices where bpf programs only see inner IP header. In RHEL based distros,
-	// kernel 4.18.0 (v4Dot18Dot0_330) is the first one with this behavior.
-	v5Dot14Dot0     = MustParseVersion("5.14.0")
-	v4Dot18Dot0_330 = MustParseVersion("4.18.0-330")
 )
 
 type FeatureDetector struct {
@@ -116,63 +95,13 @@ func (d *FeatureDetector) RefreshFeatures() {
 }
 
 func (d *FeatureDetector) refreshFeaturesLockHeld() {
-	// Get the versions.  If we fail to detect a version for some reason, we use a safe default.
-	log.Debug("Refreshing detected iptables features")
-
-	iptV := d.getIptablesVersion()
-	kerV := d.getKernelVersion()
-
-	netlinkSupportsStrict, err := d.netlinkSupportsStrict()
-	if err != nil {
-		log.WithError(err).Panic("Failed to do netlink feature detection.")
-	}
-
-	// Calculate the features.
-	features := Features{
-		SNATFullyRandom:          iptV.Compare(v1Dot6Dot0) >= 0 && kerV.Compare(v3Dot14Dot0) >= 0,
-		MASQFullyRandom:          iptV.Compare(v1Dot6Dot2) >= 0 && kerV.Compare(v3Dot14Dot0) >= 0,
-		RestoreSupportsLock:      iptV.Compare(v1Dot6Dot2) >= 0,
-		ChecksumOffloadBroken:    kerV.Compare(v5Dot7Dot0) <= 0,
-		IPIPDeviceIsL3:           d.ipipDeviceIsL3(),
-		KernelSideRouteFiltering: netlinkSupportsStrict,
-	}
-
-	for k, v := range d.featureOverride {
-		ovr, err := strconv.ParseBool(v)
-		logCxt := log.WithFields(log.Fields{
-			"flag":  k,
-			"value": v,
-		})
-		if err != nil {
-			if !d.loggedOverrides {
-				logCxt.Warn("Failed to parse value for feature detection override; ignoring")
-			}
-			continue
-		}
-		field := reflect.ValueOf(&features).Elem().FieldByName(k)
-		if field.IsValid() {
-			field.SetBool(ovr)
-		} else {
-			if !d.loggedOverrides {
-				logCxt.Warn("Unknown feature detection flag; ignoring")
-			}
-			continue
-		}
-
-		if !d.loggedOverrides {
-			logCxt.Info("Overriding feature detection flag")
-		}
-	}
-	// Avoid logging all the override values every time through this function.
-	d.loggedOverrides = true
-
-	if d.featureCache == nil || *d.featureCache != features {
-		log.WithFields(log.Fields{
-			"features":        features,
-			"kernelVersion":   kerV,
-			"iptablesVersion": iptV,
-		}).Info("Updating detected iptables features")
-		d.featureCache = &features
+	d.featureCache = &Feature {
+		SNATFullyRandom:          false,
+		MASQFullyRandom:          false,
+		RestoreSupportsLock:      false,
+		ChecksumOffloadBroken:    false,
+		IPIPDeviceIsL3:           false,
+		KernelSideRouteFiltering: false,
 	}
 }
 
@@ -245,29 +174,8 @@ func (d *FeatureDetector) ipipDeviceIsL3() bool {
 	}
 }
 
-func (d *FeatureDetector) getIptablesVersion() *Version {
-	cmd := d.NewCmd("iptables", "--version")
-	out, err := cmd.Output()
-	if err != nil {
-		log.WithError(err).Warn("Failed to get iptables version, assuming old version with no optional features")
-		return v1Dot4Dot7
-	}
-	s := string(out)
-	log.WithField("rawVersion", s).Debug("Ran iptables --version")
-	matches := vXDotYDotZRegexp.FindStringSubmatch(s)
-	if len(matches) == 0 {
-		log.WithField("rawVersion", s).Warn(
-			"Failed to parse iptables version, assuming old version with no optional features")
-		return v1Dot4Dot7
-	}
-	parsedVersion, err := NewVersion(matches[1])
-	if err != nil {
-		log.WithField("rawVersion", s).WithError(err).Warn(
-			"Failed to parse iptables version, assuming old version with no optional features")
-		return v1Dot4Dot7
-	}
-	log.WithField("version", parsedVersion).Debug("Parsed iptables version")
-	return parsedVersion
+func (d *FeatureDetector) getIpfwVersion() *Version {
+	return d.getKernelVersion()
 }
 
 func (d *FeatureDetector) getKernelVersion() *Version {
@@ -285,29 +193,7 @@ func (d *FeatureDetector) getKernelVersion() *Version {
 }
 
 func (d *FeatureDetector) netlinkSupportsStrict() (bool, error) {
-	if d.cachedNetlinkSupportsStrict != nil {
-		return *d.cachedNetlinkSupportsStrict, nil
-	}
-	h, err := d.newNetlinkHandle()
-	if err != nil {
-		return false, fmt.Errorf("failed to open netlink handle to check supported features: %w", err)
-	}
-	defer h.Delete()
-	err = h.SetStrictCheck(true)
-	if err == nil {
-		log.Debug("Kernel support strict netlink mode")
-		result := true
-		d.cachedNetlinkSupportsStrict = &result
-		return result, nil
-	} else if errors.Is(err, unix.ENOPROTOOPT) {
-		// Expected on older kernels with no support.
-		log.Debug("Kernel does not support strict netlink mode")
-		result := false
-		d.cachedNetlinkSupportsStrict = &result
-		return result, nil
-	}
-	log.WithError(err).Warn("Kernel returned unexpected error when trying to detect if " +
-		"netlink supports strict mode.  Assuming no support (this may result in higher CPU usage).")
+	log.Debug("FreeBSD does not support strict netlink mode")
 	return false, nil
 }
 

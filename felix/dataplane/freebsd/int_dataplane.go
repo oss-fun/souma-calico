@@ -414,14 +414,6 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 		OpRecorder:            dp.loopSummarizer,
 	}
 
-	// However, the NAT tables need an extra cleanup regex.
-	iptablesNATOptions := iptablesOptions
-	if iptablesNATOptions.ExtraCleanupRegexPattern == "" {
-		iptablesNATOptions.ExtraCleanupRegexPattern = rules.HistoricInsertedNATRuleRegex
-	} else {
-		iptablesNATOptions.ExtraCleanupRegexPattern += "|" + rules.HistoricInsertedNATRuleRegex
-	}
-
 	dataplaneFeatures := featureDetector.GetFeatures()
 	var iptablesLock sync.Locker
 	if dataplaneFeatures.RestoreSupportsLock {
