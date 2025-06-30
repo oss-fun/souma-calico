@@ -415,56 +415,27 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 	}
 
 	dataplaneFeatures := featureDetector.GetFeatures()
-	var iptablesLock sync.Locker
-	if dataplaneFeatures.RestoreSupportsLock {
-		log.Debug("Calico implementation of iptables lock disabled (because detected version of " +
-			"iptables-restore will use its own implementation).")
-		iptablesLock = dummyLock{}
-	} else if config.IptablesLockTimeout <= 0 {
-		log.Debug("Calico implementation of iptables lock disabled (by configuration).")
-		iptablesLock = dummyLock{}
+	var ipfwLock sync.Locker
+	if config.IpfwLockTimeout <= 0 {
+		log.Debug("Calico implementation of ipfw lock disabled (by configuration).")
+		ipfwLock = dummyLock{}
 	} else {
-		// Create the shared iptables lock.  This allows us to block other processes from
-		// manipulating iptables while we make our updates.  We use a shared lock because we
-		// actually do multiple updates in parallel (but to different tables), which is safe.
-		log.WithField("timeout", config.IptablesLockTimeout).Debug(
-			"Calico implementation of iptables lock enabled")
-		iptablesLock = iptables.NewSharedLock(
-			config.IptablesLockFilePath,
-			config.IptablesLockTimeout,
-			config.IptablesLockProbeInterval,
+		log.WithField("timeout", config.IpfwLockTimeout).Debug(
+			"Calico implementation of ipfw lock enabled")
+		ipfwLock = ipfw.NewSharedLock(
+			config.IpfwLockFilePath,
+			config.IpfwLockTimeout,
+			config.IpfwLockProbeInterval,
 		)
 	}
 
-	mangleTableV4 := iptables.NewTable(
-		"mangle",
+	allRulesetV4 := ipfw.NewRuleset(
+		"all",
 		4,
 		rules.RuleHashPrefix,
-		iptablesLock,
+		ipfwLock,
 		featureDetector,
-		iptablesOptions)
-	natTableV4 := iptables.NewTable(
-		"nat",
-		4,
-		rules.RuleHashPrefix,
-		iptablesLock,
-		featureDetector,
-		iptablesNATOptions,
-	)
-	rawTableV4 := iptables.NewTable(
-		"raw",
-		4,
-		rules.RuleHashPrefix,
-		iptablesLock,
-		featureDetector,
-		iptablesOptions)
-	filterTableV4 := iptables.NewTable(
-		"filter",
-		4,
-		rules.RuleHashPrefix,
-		iptablesLock,
-		featureDetector,
-		iptablesOptions)
+		ipfwOptions)
 	ipSetsConfigV4 := config.RulesConfig.IPSetConfigV4
 	ipSetsV4 := ipsets.NewIPSets(ipSetsConfigV4, dp.loopSummarizer)
 	dp.iptablesNATTables = append(dp.iptablesNATTables, natTableV4)
