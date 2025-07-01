@@ -279,8 +279,8 @@ type InternalDataplane struct {
 	fromDataplane           chan interface{}
 	sendDataplaneInSyncOnce sync.Once
 
-	allIpfwRuleSets    []*ipfw.Table
-	ipSets             []common.IPSetsDataplane
+	allIpfwRuleSets    []*ipfw.Ruleset
+	ipfwTable          []common.IPSetsDataplane
 
 	ipipManager *ipipManager
 
@@ -436,111 +436,17 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 		ipfwLock,
 		featureDetector,
 		ipfwOptions)
-	ipSetsConfigV4 := config.RulesConfig.IPSetConfigV4
-	ipSetsV4 := ipsets.NewIPSets(ipSetsConfigV4, dp.loopSummarizer)
-	dp.iptablesNATTables = append(dp.iptablesNATTables, natTableV4)
-	dp.iptablesRawTables = append(dp.iptablesRawTables, rawTableV4)
-	dp.iptablesMangleTables = append(dp.iptablesMangleTables, mangleTableV4)
-	dp.iptablesFilterTables = append(dp.iptablesFilterTables, filterTableV4)
-	dp.ipSets = append(dp.ipSets, ipSetsV4)
+	tableConfigV4 := config.RulesConfig.TableConfigV4
+	ipfwTableV4 := ipfwtable.NewIpfwTable(tableConfigV4, dp.loopSummarizer)
+	dp.allIpfwRuleset = append(dp.allIpfwRuleset, allRulesetV4)
+	dp.ipfwTable = append(dp.ipfwTable, tableConfigV4)
 
-	if config.RulesConfig.VXLANEnabled {
-		var routeTableVXLAN routetable.RouteTableInterface
-		if !config.RouteSyncDisabled {
-			log.Debug("RouteSyncDisabled is false.")
-			routeTableVXLAN = routetable.New([]string{"^" + VXLANIfaceNameV4 + "$"}, 4, config.NetlinkTimeout,
-				config.DeviceRouteSourceAddress, config.DeviceRouteProtocol, true, UNIX_RT_TABLE_MAIN,
-				dp.loopSummarizer, featureDetector, routetable.WithLivenessCB(dp.reportHealth))
-		} else {
-			log.Info("RouteSyncDisabled is true, using DummyTable.")
-			routeTableVXLAN = &routetable.DummyTable{}
-		}
-
-		vxlanFDB := vxlanfdb.New(netlink.FAMILY_V4, VXLANIfaceNameV4, featureDetector, config.NetlinkTimeout)
-		dp.vxlanFDBs = append(dp.vxlanFDBs, vxlanFDB)
-
-		dp.vxlanManager = newVXLANManager(
-			ipSetsV4,
-			routeTableVXLAN,
-			vxlanFDB,
-			VXLANIfaceNameV4,
-			config,
-			dp.loopSummarizer,
-			4,
-			featureDetector,
-		)
-		dp.vxlanParentC = make(chan string, 1)
-		go dp.vxlanManager.KeepVXLANDeviceInSync(context.Background(), config.VXLANMTU, dataplaneFeatures.ChecksumOffloadBroken, 10*time.Second, dp.vxlanParentC)
-		dp.RegisterManager(dp.vxlanManager)
-	} else {
-		// Start a cleanup goroutine not to block felix if it needs to retry
-		go cleanUpVXLANDevice(VXLANIfaceNameV4)
-	}
+	go cleanUpVXLANDevice(VXLANIfaceNameV4)
 
 	dp.endpointStatusCombiner = newEndpointStatusCombiner(dp.fromDataplane, config.IPv6Enabled)
 
 	callbacks := common.NewCallbacks()
 	dp.callbacks = callbacks
-	if config.XDPEnabled {
-		if err := bpf.SupportsXDP(); err != nil {
-			log.WithError(err).Warn("Can't enable XDP acceleration.")
-			config.XDPEnabled = false
-		} else if !config.BPFEnabled {
-			st, err := NewXDPState(config.XDPAllowGeneric)
-			if err != nil {
-				log.WithError(err).Warn("Can't enable XDP acceleration.")
-			} else {
-				dp.xdpState = st
-				dp.xdpState.PopulateCallbacks(callbacks)
-				dp.RegisterManager(st)
-				log.Info("XDP acceleration enabled.")
-			}
-		}
-	} else {
-		log.Info("XDP acceleration disabled.")
-	}
-
-	// TODO Support cleaning up non-BPF XDP state from a previous Felix run, when BPF mode has just been enabled.
-	if !config.BPFEnabled && dp.xdpState == nil {
-		xdpState, err := NewXDPState(config.XDPAllowGeneric)
-		if err == nil {
-			if err := xdpState.WipeXDP(); err != nil {
-				log.WithError(err).Warn("Failed to cleanup preexisting XDP state")
-			}
-		}
-		// if we can't create an XDP state it means we couldn't get a working
-		// bpffs so there's nothing to clean up
-	}
-
-	if config.SidecarAccelerationEnabled {
-		if err := bpf.SupportsSockmap(); err != nil {
-			log.WithError(err).Warn("Can't enable Sockmap acceleration.")
-		} else {
-			st, err := NewSockmapState()
-			if err != nil {
-				log.WithError(err).Warn("Can't enable Sockmap acceleration.")
-			} else {
-				dp.sockmapState = st
-				dp.sockmapState.PopulateCallbacks(callbacks)
-
-				if err := dp.sockmapState.SetupSockmapAcceleration(); err != nil {
-					dp.sockmapState = nil
-					log.WithError(err).Warn("Failed to set up Sockmap acceleration")
-				} else {
-					log.Info("Sockmap acceleration enabled.")
-				}
-			}
-		}
-	}
-
-	if dp.sockmapState == nil {
-		st, err := NewSockmapState()
-		if err == nil {
-			st.WipeSockmap(bpf.FindInBPFFSOnly)
-		}
-		// if we can't create a sockmap state it means we couldn't get a working
-		// bpffs so there's nothing to clean up
-	}
 
 	ipsetsManager := common.NewIPSetsManager("ipv4", ipSetsV4, config.MaxIPSetSize)
 	ipsetsManagerV6 := common.NewIPSetsManager("ipv6", nil, config.MaxIPSetSize)

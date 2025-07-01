@@ -24,7 +24,7 @@ import (
 	"github.com/projectcalico/api/pkg/lib/numorstring"
 
 	"github.com/projectcalico/calico/felix/config"
-	"github.com/projectcalico/calico/felix/ipsets"
+	"github.com/projectcalico/calico/felix/ipfwtable"
 	"github.com/projectcalico/calico/felix/ipfw"
 	"github.com/projectcalico/calico/felix/proto"
 )
@@ -273,8 +273,7 @@ func (r *DefaultRuleRenderer) ipSetConfig(ipVersion uint8) *ipsets.IPVersionConf
 }
 
 type Config struct {
-	IPSetConfigV4 *ipsets.IPVersionConfig
-	IPSetConfigV6 *ipsets.IPVersionConfig
+	TableConfigV4 *ipsfwtable.IPVersionConfig
 
 	WorkloadIfacePrefixes []string
 
