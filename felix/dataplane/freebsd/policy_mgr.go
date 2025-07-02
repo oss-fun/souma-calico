@@ -21,7 +21,7 @@ import (
 
 	"github.com/projectcalico/calico/libcalico-go/lib/set"
 
-	"github.com/projectcalico/calico/felix/iptables"
+	"github.com/projectcalico/calico/felix/ipfw"
 	"github.com/projectcalico/calico/felix/proto"
 	"github.com/projectcalico/calico/felix/rules"
 )
@@ -29,9 +29,7 @@ import (
 // policyManager simply renders policy/profile updates into iptables.Chain objects and sends
 // them to the dataplane layer.
 type policyManager struct {
-	rawTable         IptablesTable
-	mangleTable      IptablesTable
-	filterTable      IptablesTable
+	ruleset          IpfwRuleset
 	ruleRenderer     policyRenderer
 	ipVersion        uint8
 	rawEgressOnly    bool
@@ -45,11 +43,9 @@ type policyRenderer interface {
 	ProfileToIptablesChains(profileID *proto.ProfileID, policy *proto.Profile, ipVersion uint8) (inbound, outbound *iptables.Chain)
 }
 
-func newPolicyManager(rawTable, mangleTable, filterTable IptablesTable, ruleRenderer policyRenderer, ipVersion uint8) *policyManager {
+func newPolicyManager(ruleset IpfwRuleset, ruleRenderer policyRenderer, ipVersion uint8) *policyManager {
 	return &policyManager{
-		rawTable:     rawTable,
-		mangleTable:  mangleTable,
-		filterTable:  filterTable,
+		ruleset:      ruleset,
 		ruleRenderer: ruleRenderer,
 		ipVersion:    ipVersion,
 	}

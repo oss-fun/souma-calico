@@ -39,28 +39,15 @@ import (
 	apiv3 "github.com/projectcalico/api/pkg/apis/projectcalico/v3"
 	"github.com/projectcalico/api/pkg/lib/numorstring"
 
-	"github.com/projectcalico/calico/felix/bpf"
-	"github.com/projectcalico/calico/felix/bpf/bpfmap"
-	"github.com/projectcalico/calico/felix/bpf/conntrack"
-	bpfconntrack "github.com/projectcalico/calico/felix/bpf/conntrack"
-	"github.com/projectcalico/calico/felix/bpf/failsafes"
-	bpfifstate "github.com/projectcalico/calico/felix/bpf/ifstate"
-	bpfipsets "github.com/projectcalico/calico/felix/bpf/ipsets"
-	bpfmaps "github.com/projectcalico/calico/felix/bpf/maps"
-	"github.com/projectcalico/calico/felix/bpf/nat"
-	bpfnat "github.com/projectcalico/calico/felix/bpf/nat"
-	bpfproxy "github.com/projectcalico/calico/felix/bpf/proxy"
-	bpfroutes "github.com/projectcalico/calico/felix/bpf/routes"
-	"github.com/projectcalico/calico/felix/bpf/tc"
-	tcdefs "github.com/projectcalico/calico/felix/bpf/tc/defs"
 	"github.com/projectcalico/calico/felix/config"
 	"github.com/projectcalico/calico/felix/dataplane/common"
 	"github.com/projectcalico/calico/felix/environment"
 	"github.com/projectcalico/calico/felix/idalloc"
 	"github.com/projectcalico/calico/felix/ifacemonitor"
 	"github.com/projectcalico/calico/felix/ipsets"
-	"github.com/projectcalico/calico/felix/iptables"
-	"github.com/projectcalico/calico/felix/iptables/cmdshim"
+	"github.com/projectcalico/calico/felix/ipfwtable"
+	"github.com/projectcalico/calico/felix/ipfw"
+	"github.com/projectcalico/calico/felix/ipfw/cmdshim"
 	"github.com/projectcalico/calico/felix/jitter"
 	"github.com/projectcalico/calico/felix/labelindex"
 	"github.com/projectcalico/calico/felix/logutils"
@@ -436,10 +423,10 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 		ipfwLock,
 		featureDetector,
 		ipfwOptions)
-	tableConfigV4 := config.RulesConfig.TableConfigV4
-	ipfwTableV4 := ipfwtable.NewIpfwTable(tableConfigV4, dp.loopSummarizer)
+	ipfwtableConfigV4 := config.RulesConfig.IpfwTableConfigV4
+	ipfwTableV4 := ipfwtable.NewIpfwTable(ipfwtableConfigV4, dp.loopSummarizer)
 	dp.allIpfwRuleset = append(dp.allIpfwRuleset, allRulesetV4)
-	dp.ipfwTable = append(dp.ipfwTable, tableConfigV4)
+	dp.ipfwTable = append(dp.ipfwTable, ipfwtableConfigV4)
 
 	go cleanUpVXLANDevice(VXLANIfaceNameV4)
 
@@ -448,27 +435,21 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 	callbacks := common.NewCallbacks()
 	dp.callbacks = callbacks
 
-	ipsetsManager := common.NewIPSetsManager("ipv4", ipSetsV4, config.MaxIPSetSize)
+	ipfwTableManager := common.NewIpfwTableManager("ipv4", ipfwTableV4, config.MaxIPSetSize)
 
-	dp.RegisterManager(ipsetsManager)
+	dp.RegisterManager(ipfwTableManager)
 
-	dp.ipsetsSourceV4 = ipsetsManager
+	dp.ipfwTableSourceV4 = ipfwTableManager
 	dp.RegisterManager(newHostIPManager(
 		config.RulesConfig.WorkloadIfacePrefixes,
-		rules.IPSetIDThisHostIPs,
-		ipSetsV4,
-		config.MaxIPSetSize))
-	dp.RegisterManager(newPolicyManager(rawTableV4, mangleTableV4, filterTableV4, ruleRenderer, 4))
+		rules.IpfwTableIDThisHostIPs,
+		ipfwTableV4,
+		config.MaxIpfwTableSize))
+	dp.RegisterManager(newPolicyManager(allRulesetV4, ruleRenderer, 4))
 
 	interfaceRegexes := make([]string, len(config.RulesConfig.WorkloadIfacePrefixes))
 	for i, r := range config.RulesConfig.WorkloadIfacePrefixes {
 		interfaceRegexes[i] = "^" + r + ".*"
-	}
-
-	defaultRPFilter, err := os.ReadFile("/proc/sys/net/ipv4/conf/default/rp_filter")
-	if err != nil {
-		log.Warn("could not determine default rp_filter setting, defaulting to strict")
-		defaultRPFilter = []byte{'1'}
 	}
 
 	var routeTableV4 routetable.RouteTableInterface

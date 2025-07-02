@@ -12,7 +12,7 @@ import (
 )
 
 type dataplaneMetadata struct {
-	Type         TableType
+	Type         IpfwTableType
 	MaxSize      int
 	RangeMin     int
 	RangeMax     int
@@ -25,9 +25,9 @@ type IpfwTable struct {
 	setNameToAllMetadata map[string]dataplaneMetadata
 	setNameToProgrammedMetadata *deltatracker.DeltaTracker[string, dataplaneMetadata]
 
-	mainSetNameToMembers   map[string]*deltatracker.SetDeltaTracker[IPSetMember]
+	mainSetNameToMembers   map[string]*deltatracker.SetDeltaTracker[IpfwTableMember]
 	nextTempIPSetIdx       uint
-	ipSetsWithDirtyMembers set.Set[string]
+	ipfwTableWithDirtyMembers set.Set[string]
 
 	resyncRequired bool
 
@@ -41,7 +41,7 @@ type IpfwTable struct {
 
 	opReporter logutils.OpRecorder
 
-	neededIPSetNames set.Set[string]
+	neededIpfwTableNames set.Set[string]
 }
 
 func NewIPSets(ipVersionConfig *IPVersionConfig, recorder logutils.OpRecorder) *IPSets {

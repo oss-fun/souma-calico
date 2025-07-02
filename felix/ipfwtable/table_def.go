@@ -10,53 +10,61 @@ import (
 	"github.com/projectcalico/calico/felix/ip"
 )
 
-const MaxTableNameLength = 63
+const MaxIpfwTableNameLength = 63
 
-const TableNamePrefix = "cali"
+const IpfwTableNamePrefix = "cali"
 
-type TableType string
+type IpfwTableType string
 
 const (
-	TableTypeIP    TableType = "ip"
-	TableTypeNet   TableType = "net"
-	TableTypeIface TableType = "iface"
-	TableTypePort  TableType = "port"
+	IpfwTableTypeIP    IpfwTableType = "ip"
+	IpfwTableTypeNet   IpfwTableType = "net"
+	IpfwTableTypeIface IpfwTableType = "iface"
+	IpfwTableTypePort  IpfwTableType = "port"
 )
 
-var AllTableTypes = []TableType{
-	TableTypeIP,
-	TableTypeNet,
-	TableTypeIface,
-	TableTypePort,
+var AllIpfwTableTypes = []IpfwTableType{
+	IpfwTableTypeIP,
+	IpfwTableTypeNet,
+	IpfwTableTypeIface,
+	IpfwTableTypePort,
 }
 
-func (t TableType) CanonicaliseMenber(menber string) TableMember {
+func (t IpfwTableType) CanonicaliseMenber(menber string) IpfwTableMember {
 	switch t {
-	case: TableTypeIP:
+	case: IpfwTableTypeIP:
 		ipAddr := ip.FromIPOrCIDRString(member)
 		if ipAddr == nil {
 			log.WithField("ip", member).Panic("Failed to parse IP")
 		}
 		return ipAddr
-	case: TableTypeNet:
+	case: IpfwTableTypeNet:
 		return ip.MustParseCIDROrIP(member)
-	case: TableTypeIface:
-		return rawTableMember(member)
-	case: TableTypePort:
-		return rawTableMember(member)
+	case: IpfwTableTypeIface:
+		return rawIpfwTableMember(member)
+	case: IpfwTableTypePort:
+		return rawIpfwTableMember(member)
 	}
 	log.WithField("type", string(t)).Panic("Unknown TableType")
 	return nil
 }
 
-type TableMember interface {
+type IpfwTableMember interface {
 	String() string
 }
 
-type rawTableMember string
+type rawIpfwTableMember string
 
-func (r rawTableMember) String() string {
+func (r rawIpfwTableMember) String() string {
 	return string(r)
+}
+
+type IpfwTableMetadata struct {
+	SetID    string
+	Type     IpfwTableType
+	MaxSize  int
+	RangeMin int
+	RangeMax int
 }
 
 type IPVersionConfig struct {

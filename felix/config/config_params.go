@@ -258,7 +258,7 @@ type Config struct {
 	FeatureDetectOverride              map[string]string `config:"keyvaluelist;;"`
 	FeatureGates                       map[string]string `config:"keyvaluelist;;"`
 	IpsetsRefreshInterval              time.Duration     `config:"seconds;10"`
-	MaxIpsetSize                       int               `config:"int;1048576;non-zero"`
+	MaxIpfwTableSize                       int               `config:"int;1048576;non-zero"`
 	XDPRefreshInterval                 time.Duration     `config:"seconds;90"`
 
 	PolicySyncPathPrefix string `config:"file;;"`
