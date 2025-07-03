@@ -70,19 +70,19 @@ type floatingIPManager struct {
 	ipVersion uint8
 
 	// Our dependencies.
-	natTable     IptablesTable
+	natTable     IpfwRuleset
 	ruleRenderer rules.RuleRenderer
 
 	// Internal state.
-	activeDNATChains []*iptables.Chain
-	activeSNATChains []*iptables.Chain
+	activeDNATChains []*ipfw.Chain
+	activeSNATChains []*ipfw.Chain
 	natInfo          map[proto.WorkloadEndpointID][]*proto.NatInfo
 	dirtyNATInfo     bool
 	enabled          bool
 }
 
 func newFloatingIPManager(
-	natTable IptablesTable,
+	natTable IpfwRuleset,
 	ruleRenderer rules.RuleRenderer,
 	ipVersion uint8,
 	enabled bool,
@@ -92,8 +92,8 @@ func newFloatingIPManager(
 		ruleRenderer: ruleRenderer,
 		ipVersion:    ipVersion,
 
-		activeDNATChains: []*iptables.Chain{},
-		activeSNATChains: []*iptables.Chain{},
+		activeDNATChains: []*ipfw.Chain{},
+		activeSNATChains: []*iptfw.Chain{},
 		natInfo:          map[proto.WorkloadEndpointID][]*proto.NatInfo{},
 		dirtyNATInfo:     true,
 		enabled:          enabled,

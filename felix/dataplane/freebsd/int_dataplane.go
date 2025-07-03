@@ -466,9 +466,7 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 	}
 
 	epManager := newEndpointManager(
-		rawTableV4,
-		mangleTableV4,
-		filterTableV4,
+		allRulesetV4,
 		ruleRenderer,
 		routeTableV4,
 		4,
@@ -477,25 +475,18 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 		config.RulesConfig.WorkloadIfacePrefixes,
 		dp.endpointStatusCombiner.OnEndpointStatusUpdate,
 		string(defaultRPFilter),
-		config.BPFEnabled,
-		bpfEndpointManager,
 		callbacks,
 		config.FloatingIPsEnabled,
 	)
 	dp.RegisterManager(epManager)
 	dp.endpointsSourceV4 = epManager
 	dp.RegisterManager(newFloatingIPManager(natTableV4, ruleRenderer, 4, config.FloatingIPsEnabled))
-	dp.RegisterManager(newMasqManager(ipSetsV4, natTableV4, ruleRenderer, config.MaxIPSetSize, 4))
-	if config.RulesConfig.IPIPEnabled {
-		// Add a manager to keep the all-hosts IP set up to date.
-		dp.ipipManager = newIPIPManager(ipSetsV4, config.MaxIPSetSize, config.ExternalNodesCidrs)
-		dp.RegisterManager(dp.ipipManager) // IPv4-only
-	} else {
-		// Only clean up IPIP addresses if IPIP is implicitly disabled (no IPIP pools and not explicitly set in FelixConfig)
-		if config.RulesConfig.FelixConfigIPIPEnabled == nil {
-			// Start a cleanup goroutine not to block felix if it needs to retry
-			go cleanUpIPIPAddrs()
-		}
+	dp.RegisterManager(newMasqManager(ipfwTableV4, natTableV4, ruleRenderer, config.MaxIPSetSize, 4))
+	
+	// Only clean up IPIP addresses if IPIP is implicitly disabled (no IPIP pools and not explicitly set in FelixConfig)
+	if config.RulesConfig.FelixConfigIPIPEnabled == nil {
+		// Start a cleanup goroutine not to block felix if it needs to retry
+		go cleanUpIPIPAddrs()
 	}
 
 	// Add a manager for IPv4 wireguard configuration. This is added irrespective of whether wireguard is actually enabled
@@ -516,11 +507,6 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 	dp.RegisterManager(dp.wireguardManager) // IPv4
 
 	dp.RegisterManager(newServiceLoopManager(filterTableV4, ruleRenderer, 4))
-
-	dp.allIptablesTables = append(dp.allIptablesTables, dp.iptablesMangleTables...)
-	dp.allIptablesTables = append(dp.allIptablesTables, dp.iptablesNATTables...)
-	dp.allIptablesTables = append(dp.allIptablesTables, dp.iptablesFilterTables...)
-	dp.allIptablesTables = append(dp.allIptablesTables, dp.iptablesRawTables...)
 
 	// Register that we will report liveness and readiness.
 	if config.HealthAggregator != nil {

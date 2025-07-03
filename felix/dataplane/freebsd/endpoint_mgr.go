@@ -125,9 +125,7 @@ type endpointManager struct {
 	floatingIPsEnabled     bool
 
 	// Our dependencies.
-	rawTable     IptablesTable
-	mangleTable  IptablesTable
-	filterTable  IptablesTable
+	allRuleset   IpfwRuleset
 	ruleRenderer rules.RuleRenderer
 	routeTable   routetable.RouteTableInterface
 	writeProcSys procSysWriter
@@ -201,8 +199,6 @@ type endpointManager struct {
 	// Callbacks
 	OnEndpointStatusUpdate EndpointStatusUpdateCallback
 	callbacks              endpointManagerCallbacks
-	bpfEnabled             bool
-	bpfEndpointManager     hepListener
 }
 
 type EndpointStatusUpdateCallback func(ipVersion uint8, id interface{}, status string)
@@ -210,9 +206,7 @@ type EndpointStatusUpdateCallback func(ipVersion uint8, id interface{}, status s
 type procSysWriter func(path, value string) error
 
 func newEndpointManager(
-	rawTable IptablesTable,
-	mangleTable IptablesTable,
-	filterTable IptablesTable,
+	allRuleset IpfwRuleset,
 	ruleRenderer rules.RuleRenderer,
 	routeTable routetable.RouteTableInterface,
 	ipVersion uint8,
@@ -221,15 +215,11 @@ func newEndpointManager(
 	wlInterfacePrefixes []string,
 	onWorkloadEndpointStatusUpdate EndpointStatusUpdateCallback,
 	defaultRPFilter string,
-	bpfEnabled bool,
-	bpfEndpointManager hepListener,
 	callbacks *common.Callbacks,
 	floatingIPsEnabled bool,
 ) *endpointManager {
 	return newEndpointManagerWithShims(
-		rawTable,
-		mangleTable,
-		filterTable,
+		allRuleset,
 		ruleRenderer,
 		routeTable,
 		ipVersion,
@@ -240,17 +230,13 @@ func newEndpointManager(
 		writeProcSys,
 		os.Stat,
 		defaultRPFilter,
-		bpfEnabled,
-		bpfEndpointManager,
 		callbacks,
 		floatingIPsEnabled,
 	)
 }
 
 func newEndpointManagerWithShims(
-	rawTable IptablesTable,
-	mangleTable IptablesTable,
-	filterTable IptablesTable,
+	allRuleset IpfwRuleset,
 	ruleRenderer rules.RuleRenderer,
 	routeTable routetable.RouteTableInterface,
 	ipVersion uint8,
@@ -261,8 +247,6 @@ func newEndpointManagerWithShims(
 	procSysWriter procSysWriter,
 	osStat func(name string) (os.FileInfo, error),
 	defaultRPFilter string,
-	bpfEnabled bool,
-	bpfEndpointManager hepListener,
 	callbacks *common.Callbacks,
 	floatingIPsEnabled bool,
 ) *endpointManager {
@@ -277,9 +261,7 @@ func newEndpointManagerWithShims(
 		bpfEndpointManager:     bpfEndpointManager,
 		floatingIPsEnabled:     floatingIPsEnabled,
 
-		rawTable:     rawTable,
-		mangleTable:  mangleTable,
-		filterTable:  filterTable,
+		allRuleset:   allRuleset,
 		ruleRenderer: ruleRenderer,
 		routeTable:   routeTable,
 		writeProcSys: procSysWriter,

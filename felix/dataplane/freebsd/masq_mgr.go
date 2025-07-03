@@ -39,8 +39,8 @@ import (
 // pool is excluded.
 type masqManager struct {
 	ipVersion       uint8
-	ipsetsDataplane common.IPSetsDataplane
-	natTable        IptablesTable
+	ipsetsDataplane common.IpfwTableDataplane
+	natTable        IpfwRuleset
 	activePools     map[string]*proto.IPAMPool
 	masqPools       set.Set[string]
 	dirty           bool
@@ -50,8 +50,8 @@ type masqManager struct {
 }
 
 func newMasqManager(
-	ipsetsDataplane common.IPSetsDataplane,
-	natTable IptablesTable,
+	ipfwTableDataplane common.IpfwTableDataplane,
+	natTable IpfwRuleset,
 	ruleRenderer rules.RuleRenderer,
 	maxIPSetSize int,
 	ipVersion uint8,
@@ -61,18 +61,18 @@ func newMasqManager(
 	// in sync, by which point we'll have added all our CIDRs into the sets.
 	ipsetsDataplane.AddOrReplaceIPSet(ipsets.IPSetMetadata{
 		MaxSize: maxIPSetSize,
-		SetID:   rules.IPSetIDNATOutgoingAllPools,
-		Type:    ipsets.IPSetTypeHashNet,
+		SetID:   rules.IpfwTableIDNATOutgoingAllPools,
+		Type:    ipfwtable.IpfwTableTypeHashNet,
 	}, []string{})
 	ipsetsDataplane.AddOrReplaceIPSet(ipsets.IPSetMetadata{
 		MaxSize: maxIPSetSize,
-		SetID:   rules.IPSetIDNATOutgoingMasqPools,
-		Type:    ipsets.IPSetTypeHashNet,
+		SetID:   rules.IpfwTableIDNATOutgoingMasqPools,
+		Type:    ipfwtable.IpfwTableTypeHashNet,
 	}, []string{})
 
 	return &masqManager{
 		ipVersion:       ipVersion,
-		ipsetsDataplane: ipsetsDataplane,
+		ipfwTableDataplane: ipfwTableDataplane,
 		natTable:        natTable,
 		activePools:     map[string]*proto.IPAMPool{},
 		masqPools:       set.New[string](),
