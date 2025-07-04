@@ -16,18 +16,14 @@ package environment
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"os/exec"
-	"reflect"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/sys/unix"
 
 	"github.com/projectcalico/calico/felix/netlinkshim"
 
@@ -95,7 +91,7 @@ func (d *FeatureDetector) RefreshFeatures() {
 }
 
 func (d *FeatureDetector) refreshFeaturesLockHeld() {
-	d.featureCache = &Feature {
+	d.featureCache = &Features {
 		SNATFullyRandom:          false,
 		MASQFullyRandom:          false,
 		RestoreSupportsLock:      false,
@@ -161,15 +157,7 @@ func (d *FeatureDetector) getDistributionName() string {
 
 func (d *FeatureDetector) ipipDeviceIsL3() bool {
 	switch d.getDistributionName() {
-	case RedHat:
-		if err := d.isAtLeastKernel(v4Dot18Dot0_330); err != nil {
-			return false
-		}
-		return true
 	default:
-		if err := d.isAtLeastKernel(v5Dot14Dot0); err != nil {
-			return false
-		}
 		return true
 	}
 }
@@ -181,13 +169,13 @@ func (d *FeatureDetector) getIpfwVersion() *Version {
 func (d *FeatureDetector) getKernelVersion() *Version {
 	reader, err := d.GetKernelVersionReader()
 	if err != nil {
-		log.WithError(err).Warn("Failed to get the kernel version reader, assuming old version with no optional features")
-		return v3Dot10Dot0
+		log.WithError(err).Warn("Failed to get the kernel version reader")
+		return nil
 	}
 	kernVersion, err := GetKernelVersion(reader)
 	if err != nil {
-		log.WithError(err).Warn("Failed to get kernel version, assuming old version with no optional features")
-		return v3Dot10Dot0
+		log.WithError(err).Warn("Failed to get kernel version")
+		return nil
 	}
 	return kernVersion
 }

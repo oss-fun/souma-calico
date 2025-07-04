@@ -17,7 +17,7 @@ package environment
 import (
 	"fmt"
 	"io"
-	"os"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -103,7 +103,12 @@ func convertVersionToIntSlice(s string) ([]int, error) {
 }
 
 func GetKernelVersionReader() (io.Reader, error) {
-	return bytes.NewReader(exec.Command("uname", "-sr").Output())
+	out, err := exec.Command("uname", "-sr").Output()
+	if err != nil {
+		return nil, err
+	}
+
+	return bytes.NewReader(out), nil
 }
 
 func GetVersionFromString(s string) (*Version, error) {
@@ -122,8 +127,8 @@ func GetVersionFromString(s string) (*Version, error) {
 func GetDistFromString(s string) string {
 	sLower := strings.ToLower(s)
 	distName := DefaultDistro
-	if strings.Contains(sLowera, "FreeBSD") {
-		distName = Ubuntu
+	if strings.Contains(sLower, "FreeBSD") {
+		distName = FreeBSD
 	}
 	return distName
 }

@@ -1,5 +1,3 @@
-//go:build !freebsd
-
 // Copyright (c) 2021 Tigera, Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,6 +13,8 @@
 // limitations under the License.
 
 // Copyright (c) 2021  All rights reserved.
+
+//go:build !freebsd
 
 package failsafes
 

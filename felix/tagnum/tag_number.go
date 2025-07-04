@@ -1,3 +1,5 @@
+//go:build freebsd
+
 package tagnum
 
 import (
@@ -15,7 +17,7 @@ type TagNumManager struct {
 }
 
 func NewTagNumManager(tagName string) *TagNumManager {
-	return TagNumManager{name: tagName}
+	return &TagNumManager{name: tagName}
 }
 
 func (mc *TagNumManager) NextTagNum() (uint16, error) {

@@ -1,7 +1,8 @@
+//go:build freebsd
+
 package ipfw
 
 import (
-	"os/exec"
 	"regexp"
 	"sync"
 	"time"

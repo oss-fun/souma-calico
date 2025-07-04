@@ -17,7 +17,7 @@
 package timeshim
 
 import (
-	"github.com/projectcalico/calico/felix/bpf"
+	"time"
 )
 
 // Time is our shim interface to the time package.
@@ -27,5 +27,5 @@ type Interface interface {
 }
 
 func (realTime) KTimeNanos() int64 {
-	return bpf.KTimeNanos()
+	return time.Since(startupTime).Nanoseconds()
 }

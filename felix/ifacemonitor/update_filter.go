@@ -21,8 +21,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/oss-fun/netlink"
-
-	"github.com/projectcalico/calico/felix/timeshim"
 )
 
 const FlapDampingDelay = 100 * time.Millisecond

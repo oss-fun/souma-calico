@@ -32,4 +32,7 @@
 // BPF supports calling certain designated helper functions, which are exported by the kernel.
 // To call a helper function, place its arguments in R1-R5 and then execute the Call instruction
 // with one of the HelperXXX constants.
+
+//go:build !freebsd
+
 package asm

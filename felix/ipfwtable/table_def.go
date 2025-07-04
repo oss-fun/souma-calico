@@ -1,8 +1,10 @@
+//go:build freebsd
+
 package ipfwtable
 
 import (
 	"fmt"
-	"regxp"
+	"regexp"
 	"strings"
 
 	log "github.com/sirupsen/logrus"
@@ -30,19 +32,19 @@ var AllIpfwTableTypes = []IpfwTableType{
 	IpfwTableTypePort,
 }
 
-func (t IpfwTableType) CanonicaliseMenber(menber string) IpfwTableMember {
+func (t IpfwTableType) CanonicaliseMenber(member string) IpfwTableMember {
 	switch t {
-	case: IpfwTableTypeIP:
+	case IpfwTableTypeIP:
 		ipAddr := ip.FromIPOrCIDRString(member)
 		if ipAddr == nil {
 			log.WithField("ip", member).Panic("Failed to parse IP")
 		}
 		return ipAddr
-	case: IpfwTableTypeNet:
+	case IpfwTableTypeNet:
 		return ip.MustParseCIDROrIP(member)
-	case: IpfwTableTypeIface:
+	case IpfwTableTypeIface:
 		return rawIpfwTableMember(member)
-	case: IpfwTableTypePort:
+	case IpfwTableTypePort:
 		return rawIpfwTableMember(member)
 	}
 	log.WithField("type", string(t)).Panic("Unknown TableType")
@@ -59,6 +61,30 @@ func (r rawIpfwTableMember) String() string {
 	return string(r)
 }
 
+type IPFamily string
+
+const (
+	IPFamilyV4 = IPFamily("inet")
+	IPFamilyV6 = IPFamily("inet6")
+)
+
+func (f IPFamily) IsValid() bool {
+	switch f {
+	case IPFamilyV4, IPFamilyV6:
+		return true
+	}
+	return false
+}
+func (f IPFamily) Version() int {
+	switch f {
+	case IPFamilyV4:
+		return 4
+	case IPFamilyV6:
+		return 6
+	}
+	return 0
+}
+
 type IpfwTableMetadata struct {
 	SetID    string
 	Type     IpfwTableType
@@ -70,14 +96,14 @@ type IpfwTableMetadata struct {
 type IPVersionConfig struct {
 	Family                IPFamily
 	tableNamePrefix       string
-	temptableNamePrefix   string
-	maintableNamePrefix   string
+	tempTableNamePrefix   string
+	mainTableNamePrefix   string
 	ourNamePrefixesRegexp *regexp.Regexp
 }
 
 const (
-	mainTableToken = "0"
-	tempTableToken = "t"
+	mainIpfwTableToken = "0"
+	tempIpfwTableToken = "t"
 )
 
 func NewIPVersionConfig(
@@ -109,9 +135,9 @@ func NewIPVersionConfig(
 
 	return &IPVersionConfig{
 		Family:                family,
-		TableNamePrefix:       versionedPrefix,
-		tempTableNamePrefix:   versionedPrefix + tempIpsetToken,
-		mainTableNamePrefix:   versionedPrefix + mainIpsetToken,
+		tableNamePrefix:       versionedPrefix,
+		tempTableNamePrefix:   versionedPrefix + tempIpfwTableToken,
+		mainTableNamePrefix:   versionedPrefix + mainIpfwTableToken,
 		ourNamePrefixesRegexp: ourNamesRegexp,
 	}
 }

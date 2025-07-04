@@ -15,12 +15,13 @@
 
 // This file is based on that extracted from Kubernetes at pkg/util/ipfw/ipfw_linux.go.
 
+//go:build freebsd
+
 package ipfw
 
 import (
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"time"
 
@@ -39,10 +40,10 @@ var (
 		Name: "felix_ipfw_lock_acquire_secs",
 		Help: "Time in seconds that it took to acquire the ipfw lock(s).",
 	})
-	countLockRetries = prometheus.NewCounterVec(prometheus.CounterOpts{
+	countLockRetries = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "felix_ipfw_lock_retries",
 		Help: "Number of times the ipfw lock was held by someone else and we had to retry.",
-	}, []string{"version"})
+	})
 )
 
 func init() {

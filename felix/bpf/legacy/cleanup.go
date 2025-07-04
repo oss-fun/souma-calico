@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows, !freebsd
 
 // Copyright (c) 2023 Tigera, Inc. All rights reserved.
 //

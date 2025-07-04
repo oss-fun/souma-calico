@@ -1,5 +1,3 @@
-//go:build !freebsd
-
 // Copyright (c) 2023 Tigera, Inc. All rights reserved.
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +18,8 @@
 //
 // It does not call the bpf() syscall itself but executes external programs
 // like bpftool and ip.
+
+//go:build !freebsd
 
 package utils
 

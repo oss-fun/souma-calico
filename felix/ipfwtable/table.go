@@ -1,3 +1,5 @@
+//go:build freebsd
+
 package ipfwtable
 
 import (
@@ -6,9 +8,38 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 
+	cprometheus "github.com/projectcalico/calico/libcalico-go/lib/prometheus"
+
 	"github.com/projectcalico/calico/felix/deltatracker"
 	"github.com/projectcalico/calico/felix/logutils"
 	"github.com/projectcalico/calico/libcalico-go/lib/set"
+)
+
+var (
+	gaugeVecNumCalicoIpfwTable = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "felix_ipfw_table_calico",
+		Help: "Number of active Calico Ipfw table.",
+	}, []string{"ip_version"})
+	gaugeNumTotalIpfwTable = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "felix_ipfw_table_total",
+		Help: "Total number of active Ipfw table.",
+	})
+	countNumIpfwTableCalls = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "felix_ipfw_table_calls",
+		Help: "Number of ipfw table commands executed.",
+	})
+	countNumIpfwTableErrors = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "felix_ipfw_table_errors",
+		Help: "Number of ipfw table command failures.",
+	})
+	countNumIpfwTableLinesExecuted = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "felix_ipfw_table_lines_executed",
+		Help: "Number of ipfw table operations executed.",
+	})
+	summaryExecStart = cprometheus.NewSummary(prometheus.SummaryOpts{
+		Name: "felix_exec_time_micros",
+		Help: "Summary of time taken to fork/exec child processes",
+	})
 )
 
 type dataplaneMetadata struct {
@@ -26,7 +57,7 @@ type IpfwTable struct {
 	setNameToProgrammedMetadata *deltatracker.DeltaTracker[string, dataplaneMetadata]
 
 	mainSetNameToMembers   map[string]*deltatracker.SetDeltaTracker[IpfwTableMember]
-	nextTempIPSetIdx       uint
+	nextTempIpfwTableIdx       uint
 	ipfwTableWithDirtyMembers set.Set[string]
 
 	resyncRequired bool
@@ -35,7 +66,7 @@ type IpfwTable struct {
 
 	sleep func(time.Duration)
 
-	gaugeNumIpsets prometheus.Gauge
+	gaugeNumIpfwTable prometheus.Gauge
 
 	logCxt *log.Entry
 
@@ -44,8 +75,8 @@ type IpfwTable struct {
 	neededIpfwTableNames set.Set[string]
 }
 
-func NewIPSets(ipVersionConfig *IPVersionConfig, recorder logutils.OpRecorder) *IPSets {
-	return NewIPSetsWithShims(
+func NewIpfwTable(ipVersionConfig *IPVersionConfig, recorder logutils.OpRecorder) *IpfwTable {
+	return NewIpfwTableWithShims(
 		ipVersionConfig,
 		recorder,
 		newRealCmd,
@@ -53,14 +84,14 @@ func NewIPSets(ipVersionConfig *IPVersionConfig, recorder logutils.OpRecorder) *
 	)
 }
 
-func NewIPSetsWithShims(
+func NewIpfwTableWithShims(
 	ipVersionConfig *IPVersionConfig,
 	recorder logutils.OpRecorder,
 	cmdFactory cmdFactory,
 	sleep func(time.Duration),
-) *IPSets {
+) *IpfwTable {
 	familyStr := string(ipVersionConfig.Family)
-	return &IPSets{
+	return &IpfwTable{
 		IPVersionConfig: ipVersionConfig,
 
 		setNameToAllMetadata: map[string]dataplaneMetadata{},
@@ -69,18 +100,18 @@ func NewIPSetsWithShims(
 				return a == b
 			}),
 			deltatracker.WithLogCtx[string, dataplaneMetadata](log.WithFields(log.Fields{
-				"ipsetFamily": ipVersionConfig.Family,
+				"ipfwTableFamily": ipVersionConfig.Family,
 			})),
 		),
-		mainSetNameToMembers: map[string]*deltatracker.SetDeltaTracker[IPSetMember]{},
+		mainSetNameToMembers: map[string]*deltatracker.SetDeltaTracker[IpfwTableMember]{},
 
-		ipSetsWithDirtyMembers: set.New[string](),
+		ipfwTableWithDirtyMembers: set.New[string](),
 		resyncRequired:         true,
 
 		newCmd: cmdFactory,
 		sleep:  sleep,
 
-		gaugeNumIpsets: gaugeVecNumCalicoIpsets.WithLabelValues(familyStr),
+		gaugeNumIpfwTable: gaugeVecNumCalicoIpfwTable.WithLabelValues(familyStr),
 
 		logCxt: log.WithFields(log.Fields{
 			"family": ipVersionConfig.Family,
