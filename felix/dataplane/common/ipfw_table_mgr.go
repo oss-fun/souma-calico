@@ -4,7 +4,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/projectcalico/calico/felix/ipfwtable"
-
+	"github.com/projectcalico/calico/libcalico-go/lib/set"
 )
 
 type IpfwTableDataplane interface {
@@ -20,20 +20,20 @@ type IpfwTableDataplane interface {
 	ApplyDeletions() (reschedule bool)
 }
 
-type IpfwTablesManager struct {
+type IpfwTableManager struct {
 	dataplanes []IpfwTableDataplane
 	maxSize    int
 	lg         *log.Entry
 }
 
-func NewIPSetsManager(name string, ipsets_ IPSetsDataplane, maxIPSetSize int) *IPSetsManager {
-	m := &IPSetsManager{
-		maxSize: maxIPSetSize,
+func NewIpfwTableManager(name string, ipfwtable_ IpfwTableDataplane, maxIpfwTableSize int) *IpfwTableManager {
+	m := &IpfwTableManager{
+		maxSize: maxIpfwTableSize,
 		lg:      log.WithField("name", name),
 	}
 
-	if ipsets_ != nil {
-		m.dataplanes = append(m.dataplanes, ipsets_)
+	if ipfwtable_ != nil {
+		m.dataplanes = append(m.dataplanes, ipfwtable_)
 	}
 
 	return m

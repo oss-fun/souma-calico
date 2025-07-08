@@ -99,10 +99,10 @@ func (r *DefaultRuleRenderer) WorkloadInterfaceAllowChains(
 
 // In some scenario, e.g. packet goes to an kubernetes ipvs service ip. Traffic goes through input/output filter chain
 // instead of forward filter chain. It is not feasible to match on an incoming workload/host interface with service ips.
-// Assemble a set-endpoint-mark chain to set the endpoint mark matching on the incoming workload/host interface and
-// a from-endpoint-mark chain to jump to a corresponding endpoint chain matching on its endpoint mark.
-func (r *DefaultRuleRenderer) EndpointMarkDispatchChains(
-	epMarkMapper EndpointMarkMapper,
+// Assemble a set-endpoint-tag chain to set the endpoint tag matching on the incoming workload/host interface and
+// a from-endpoint-tag chain to jump to a corresponding endpoint chain matching on its endpoint tag.
+func (r *DefaultRuleRenderer) EndpointTagDispatchChains(
+	epTagMapper EndpointTagMapper,
 	wlEndpoints map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint,
 	hepEndpoints map[string]proto.HostEndpointID,
 ) []*Chain {
@@ -111,7 +111,7 @@ func (r *DefaultRuleRenderer) EndpointMarkDispatchChains(
 		"numWorkloadEndpoint": len(wlEndpoints),
 		"numHostEndpoint":     len(hepEndpoints),
 	})
-	logCxt.Debug("Rendering endpoint mark dispatch chains")
+	logCxt.Debug("Rendering endpoint tag dispatch chains")
 	wlNames := make([]string, 0, len(wlEndpoints))
 	for _, endpoint := range wlEndpoints {
 		wlNames = append(wlNames, endpoint.Name)
@@ -121,15 +121,15 @@ func (r *DefaultRuleRenderer) EndpointMarkDispatchChains(
 		hepNames = append(hepNames, ifaceName)
 	}
 
-	return r.endpointMarkDispatchChains(
+	return r.endpointTagDispatchChains(
 		wlNames,
 		hepNames,
-		epMarkMapper,
-		SetEndPointMarkPfx,
+		epTagMapper,
+		SetEndPointTagPfx,
 		WorkloadFromEndpointPfx,
 		HostFromEndpointForwardPfx,
-		ChainDispatchSetEndPointMark,
-		ChainDispatchFromEndPointMark,
+		ChainDispatchSetEndPointTag,
+		ChainDispatchFromEndPointTag,
 	)
 }
 
@@ -329,39 +329,39 @@ func (r *DefaultRuleRenderer) interfaceNameDispatchChains(
 	return chains
 }
 
-func (r *DefaultRuleRenderer) endpointMarkDispatchChains(
+func (r *DefaultRuleRenderer) endpointTagDispatchChains(
 	wlNames []string,
 	hepNames []string,
-	epMarkMapper EndpointMarkMapper,
-	setMarkPfx,
-	wlFromMarkPfx,
-	hepFromMarkPfx,
-	dispatchSetMarkEndpointChainName,
-	dispatchFromMarkEndpointChainName string,
+	epTagMapper EndpointTagMapper,
+	setTagPfx,
+	wlFromTagPfx,
+	hepFromTagPfx,
+	dispatchSetTagEndpointChainName,
+	dispatchFromTagEndpointChainName string,
 ) []*Chain {
 
-	log.WithField("ifaceNames", append(wlNames, hepNames...)).Debug("Rendering endpoint mark dispatch chains")
+	log.WithField("ifaceNames", append(wlNames, hepNames...)).Debug("Rendering endpoint tag dispatch chains")
 
-	// start rendering set mark rules.
-	rootSetMarkRules := make([]Rule, 0)
+	// start rendering set tag rules.
+	rootSetTagRules := make([]Rule, 0)
 	chains := make([]*Chain, 0)
 
 	// Since there can be >100 endpoints, putting them in a single list adds some latency to
 	// endpoints that are later in the chain.  To reduce that impact, we build a shallow tree of
 	// chains based on the prefixes of the chains.
 
-	// The workload and host endpoint share the same root chain. We also need to put an non-cali mark rules at the end.
+	// The workload and host endpoint share the same root chain. We also need to put an non-cali tag rules at the end.
 	// Work out child chains and root rules for workload and host endpoint separately and merge them back together.
 	for _, names := range [][]string{wlNames, hepNames} {
 		if len(names) > 0 {
 			commonPrefix, prefixes, prefixToNames := r.sortAndDivideEndpointNamesToPrefixTree(names)
 
 			childChains, _, rootRules := r.buildSingleDispatchChains(
-				dispatchSetMarkEndpointChainName,
+				dispatchSetTagEndpointChainName,
 				commonPrefix,
 				prefixes,
 				prefixToNames,
-				setMarkPfx,
+				setTagPfx,
 				func(name string) MatchCriteria { return Match().InInterface(name) },
 				func(pfx, name string) Action {
 					return GotoAction{
@@ -372,7 +372,7 @@ func (r *DefaultRuleRenderer) endpointMarkDispatchChains(
 			)
 
 			chains = append(chains, childChains...)
-			rootSetMarkRules = append(rootSetMarkRules, rootRules...)
+			rootSetTagRules = append(rootSetTagRules, rootRules...)
 		}
 	}
 
@@ -381,26 +381,26 @@ func (r *DefaultRuleRenderer) endpointMarkDispatchChains(
 	// For instance, cni created a pod but felix has not got the workload endpoint update yet.
 	for _, prefix := range r.WorkloadIfacePrefixes {
 		ifaceMatch := prefix + "+"
-		rootSetMarkRules = append(rootSetMarkRules, Rule{
+		rootSetTagRules = append(rootSetTagRules, Rule{
 			Match:   Match().InInterface(ifaceMatch),
 			Action:  r.IptablesFilterDenyAction(),
 			Comment: []string{"Unknown endpoint"},
 		})
 	}
 
-	// At the end of set mark chain, set non-cali endpoint mark. A non-cali endpoint mark is used when a forward packet
+	// At the end of set tag chain, set non-cali endpoint tag. A non-cali endpoint tag is used when a forward packet
 	// whose incoming interface is neither a workload nor a host endpoint.
-	rootSetMarkRules = append(rootSetMarkRules, Rule{
-		Action: SetMaskedMarkAction{
-			Mark: r.IptablesMarkNonCaliEndpoint,
-			Mask: epMarkMapper.GetMask()},
-		Comment: []string{"Non-Cali endpoint mark"},
+	rootSetTagRules = append(rootSetTagRules, Rule{
+		Action: SetMaskedTagAction{
+			Tag: r.IptablesTagNonCaliEndpoint,
+			Mask: epTagMapper.GetMask()},
+		Comment: []string{"Non-Cali endpoint tag"},
 	})
 
-	// start rendering from mark rules for workload and host endpoints.
-	rootFromMarkRules := make([]Rule, 0)
+	// start rendering from tag rules for workload and host endpoints.
+	rootFromTagRules := make([]Rule, 0)
 
-	fromMarkPrefixes := []string{wlFromMarkPfx, hepFromMarkPfx}
+	fromTagPrefixes := []string{wlFromTagPfx, hepFromTagPfx}
 	for index, names := range [][]string{wlNames, hepNames} {
 		// Rendering rules for endpoints.
 		sort.Strings(names)
@@ -412,13 +412,13 @@ func (r *DefaultRuleRenderer) endpointMarkDispatchChains(
 						"Incorrect policy may be applied.")
 				continue
 			}
-			if endPointMark, err := epMarkMapper.GetEndpointMark(name); err == nil {
-				// implement each name into root rules for from-endpoint-mark chain.
-				log.WithField("ifaceName", name).Debug("Adding rule to from mark chain")
-				rootFromMarkRules = append(rootFromMarkRules, Rule{
-					Match: Match().MarkMatchesWithMask(endPointMark, epMarkMapper.GetMask()),
+			if endPointTag, err := epTagMapper.GetEndpointTag(name); err == nil {
+				// implement each name into root rules for from-endpoint-tag chain.
+				log.WithField("ifaceName", name).Debug("Adding rule to from tag chain")
+				rootFromTagRules = append(rootFromTagRules, Rule{
+					Match: Match().TagMatchesWithMask(endPointTag, epTagMapper.GetMask()),
 					Action: GotoAction{
-						Target: EndpointChainName(fromMarkPrefixes[index], name),
+						Target: EndpointChainName(fromTagPrefixes[index], name),
 					},
 				})
 			}
@@ -427,23 +427,23 @@ func (r *DefaultRuleRenderer) endpointMarkDispatchChains(
 	}
 
 	// Finalizing with a drop/reject rule.
-	log.Debugf("Adding %s rules at end of root from mark chains.", r.IptablesFilterDenyAction())
-	rootFromMarkRules = append(rootFromMarkRules, Rule{
+	log.Debugf("Adding %s rules at end of root from tag chains.", r.IptablesFilterDenyAction())
+	rootFromTagRules = append(rootFromTagRules, Rule{
 		Match:   Match(),
 		Action:  r.IptablesFilterDenyAction(),
 		Comment: []string{"Unknown interface"},
 	})
 
-	// return set mark and from mark chains.
-	setMarkDispatchChain := &Chain{
-		Name:  dispatchSetMarkEndpointChainName,
-		Rules: rootSetMarkRules,
+	// return set tag and from tag chains.
+	setTagDispatchChain := &Chain{
+		Name:  dispatchSetTagEndpointChainName,
+		Rules: rootSetTagRules,
 	}
-	fromMarkDispatchChain := &Chain{
-		Name:  dispatchFromMarkEndpointChainName,
-		Rules: rootFromMarkRules,
+	fromTagDispatchChain := &Chain{
+		Name:  dispatchFromTagEndpointChainName,
+		Rules: rootFromTagRules,
 	}
-	chains = append(chains, setMarkDispatchChain, fromMarkDispatchChain)
+	chains = append(chains, setTagDispatchChain, fromTagDispatchChain)
 
 	return chains
 }

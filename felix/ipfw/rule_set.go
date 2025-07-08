@@ -17,6 +17,10 @@ import (
 	"github.com/projectcalico/calico/libcalico-go/lib/set"
 )
 
+const (
+	MaxChainNameLength = 28
+)
+
 type RuleSet struct {
 	Name      string
 	IPVersion uint8

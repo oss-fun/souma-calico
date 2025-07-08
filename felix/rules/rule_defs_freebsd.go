@@ -34,9 +34,9 @@ const (
 	// the end to reduce clashes with other apps.  Our OpenStack DHCP agent uses prefix
 	// 'calico-dhcp-', for example.
 	ChainNamePrefix = "cali-"
-	// IPSetNamePrefix: similarly for IP sets, we use the following prefix; the IP sets layer
+	// IpfwTableNamePrefix: similarly for IP sets, we use the following prefix; the IP sets layer
 	// adds its own "-" so it isn't included here.
-	IPSetNamePrefix = ipsets.IPSetNamePrefix
+	IpfwTableNamePrefix = ipfwtable.IpfwTableNamePrefix
 
 	ChainFilterInput   = ChainNamePrefix + "INPUT"
 	ChainFilterForward = ChainNamePrefix + "FORWARD"
@@ -58,12 +58,12 @@ const (
 	ChainManglePrerouting  = ChainNamePrefix + "PREROUTING"
 	ChainManglePostrouting = ChainNamePrefix + "POSTROUTING"
 
-	IPSetIDNATOutgoingAllPools  = "all-ipam-pools"
-	IPSetIDNATOutgoingMasqPools = "masq-ipam-pools"
+	IpfwTableIDNATOutgoingAllPools  = "all-ipam-pools"
+	IpfwTableIDNATOutgoingMasqPools = "masq-ipam-pools"
 
-	IPSetIDAllHostNets        = "all-hosts-net"
-	IPSetIDAllVXLANSourceNets = "all-vxlan-net"
-	IPSetIDThisHostIPs        = "this-host"
+	IpfwTableIDAllHostNets        = "all-hosts-net"
+	IpfwTableDAllVXLANSourceNets = "all-vxlan-net"
+	IpfwTableIDThisHostIPs        = "this-host"
 
 	ChainFIPDnat = ChainNamePrefix + "fip-dnat"
 	ChainFIPSnat = ChainNamePrefix + "fip-snat"
@@ -118,7 +118,7 @@ const (
 	//
 	// Note: this regex depends on the output format of ipfw-save so,
 	// where possible, it's best to match only on part of the rule that
-	// we're sure can't change (such as the ipset name in the masquerade
+	// we're sure can't change (such as the ipfw-table name in the masquerade
 	// rule).
 	HistoricInsertedNATRuleRegex = `-A POSTROUTING .* felix-masq-ipam-pools .*|` +
 		`-A POSTROUTING -o tunl0 -m addrtype ! --src-type LOCAL --limit-iface-out -m addrtype --src-type LOCAL -j MASQUERADE`
@@ -159,12 +159,12 @@ var (
 		// Pre Felix v2.1.
 		"felix-",
 	}
-	// AllHistoricIPSetNamePrefixes, similarly contains all the prefixes we've ever used for IP
+	// AllHistoricIpfwTableNamePrefixes, similarly contains all the prefixes we've ever used for IP
 	// sets.
-	AllHistoricIPSetNamePrefixes = []string{"felix-", "cali"}
-	// LegacyV4IPSetNames contains some extra IP set names that were used in older versions of
+	AllHistoricIpfwTableNamePrefixes = []string{"felix-", "cali"}
+	// LegacyV4IpfwTableNames contains some extra IP set names that were used in older versions of
 	// Felix and don't fit our versioned pattern.
-	LegacyV4IPSetNames = []string{"felix-masq-ipam-pools", "felix-all-ipam-pools"}
+	LegacyV4IpfwTableNames = []string{"felix-masq-ipam-pools", "felix-all-ipam-pools"}
 
 	// Rule previxes used by kube-proxy.  Note: we exclude the so-called utility chains KUBE-MARK-MASQ and co because
 	// they are jointly owned by kube-proxy and kubelet.
@@ -190,13 +190,13 @@ type RuleRenderer interface {
 	StaticFilterForwardAppendRules() []ipfw.Rule
 
 	WorkloadDispatchChains(map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint) []*ipfw.Chain
-	WorkloadEndpointToipfwChains(ifaceName string, epMarkMapper EndpointMarkMapper, adminUp bool, ingressPolicies []*PolicyGroup, egressPolicies []*PolicyGroup, profileIDs []string) []*ipfw.Chain
+	WorkloadEndpointToipfwChains(ifaceName string, epTagMapper EndpointTagMapper, adminUp bool, ingressPolicies []*PolicyGroup, egressPolicies []*PolicyGroup, profileIDs []string) []*ipfw.Chain
 	PolicyGroupToipfwChains(group *PolicyGroup) []*ipfw.Chain
 
 	WorkloadInterfaceAllowChains(endpoints map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint) []*ipfw.Chain
 
 	EndpointMarkDispatchChains(
-		epMarkMapper EndpointMarkMapper,
+		epMarkMapper EndpointTagMapper,
 		wlEndpoints map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint,
 		hepEndpoints map[string]proto.HostEndpointID,
 	) []*ipfw.Chain
@@ -206,7 +206,7 @@ type RuleRenderer interface {
 	ToHostDispatchChains(map[string]proto.HostEndpointID, string) []*ipfw.Chain
 	HostEndpointToFilterChains(
 		ifaceName string,
-		epMarkMapper EndpointMarkMapper,
+		epMarkMapper EndpointTagMapper,
 		ingressPolicies []*PolicyGroup,
 		egressPolicies []*PolicyGroup,
 		ingressForwardPolicies []*PolicyGroup,
@@ -261,11 +261,9 @@ func (r *DefaultRuleRenderer) IpfwFilterDenyAction() ipfw.Action {
 	return r.ipfwFilterDenyAction
 }
 
-func (r *DefaultRuleRenderer) ipSetConfig(ipVersion uint8) *ipsets.IPVersionConfig {
+func (r *DefaultRuleRenderer) ipfwTableConfig(ipVersion uint8) *ipfwtable.IPVersionConfig {
 	if ipVersion == 4 {
-		return r.IPSetConfigV4
-	} else if ipVersion == 6 {
-		return r.IPSetConfigV6
+		return r.IpfwTableConfigV4
 	} else {
 		log.WithField("version", ipVersion).Panic("Unknown IP version")
 		return nil
@@ -273,7 +271,7 @@ func (r *DefaultRuleRenderer) ipSetConfig(ipVersion uint8) *ipsets.IPVersionConf
 }
 
 type Config struct {
-	TableConfigV4 *ipsfwtable.IPVersionConfig
+	TableConfigV4 *ipfwtable.IPVersionConfig
 
 	WorkloadIfacePrefixes []string
 

@@ -142,20 +142,20 @@ func NewIPVersionConfig(
 	}
 }
 
-func (c IPVersionConfig) NameForTempIPSet(n uint) string {
-	return fmt.Sprint(c.tempSetNamePrefix, n)
+func (c IPVersionConfig) NameForTempTable(n uint) string {
+	return fmt.Sprint(c.tempTableNamePrefix, n)
 }
 
-func (c IPVersionConfig) NameForMainIPSet(setID string) string {
-	return combineAndTrunc(c.mainSetNamePrefix, setID, MaxIPSetNameLength)
+func (c IPVersionConfig) NameForMainTable(id string) string {
+	return combineAndTrunc(c.mainTableNamePrefix, id, MaxIpfwTableNameLength)
 }
 
-func (c IPVersionConfig) OwnsIPSet(setName string) bool {
-	return c.ourNamePrefixesRegexp.MatchString(setName)
+func (c IPVersionConfig) OwnsIPSet(name string) bool {
+	return c.ourNamePrefixesRegexp.MatchString(name)
 }
 
-func (c IPVersionConfig) IsTempIPSetName(setName string) bool {
-	return strings.HasPrefix(setName, c.tempSetNamePrefix)
+func (c IPVersionConfig) IsTempIPSetName(Name string) bool {
+	return strings.HasPrefix(Name, c.tempTableNamePrefix)
 }
 
 func combineAndTrunc(prefix, suffix string, maxLength int) string {
@@ -167,10 +167,10 @@ func combineAndTrunc(prefix, suffix string, maxLength int) string {
 	}
 }
 
-func StripIPSetNamePrefix(ipSetName string) string {
-	prefixLen := len(IPSetNamePrefix) + 2 // "cali40"
-	if len(ipSetName) < prefixLen {
+func StripIpfwTableNamePrefix(tableName string) string {
+	prefixLen := len(IpfwTableNamePrefix) + 2 // "cali40"
+	if len(tableName) < prefixLen {
 		return ""
 	}
-	return ipSetName[prefixLen:]
+	return tableName[prefixLen:]
 }

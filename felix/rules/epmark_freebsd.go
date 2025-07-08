@@ -30,7 +30,7 @@ type EndpointTagMapper interface {
 }
 
 type DefaultEPTagManager struct {
-	tagNumManager *tagnum.tagNumManager
+	tagNumManager *tagnum.TagNumManager
 
 	activeEndpointToTag map[string]uint16
 	activeTagToEndpoint map[uint16]string
@@ -39,7 +39,7 @@ type DefaultEPTagManager struct {
 func NewEndpointTagMapper(nonCaliTag []uint16) EndpointTagMapper {
 	tagNumManager := tagnum.NewTagNumManager("endpoint-ipfw-tag")
 
-	if len(nonCaliTag) != 0 
+	if len(nonCaliTag) != 0 {
 		tagNumManager.UsedNum = append(tagNumManager.UsedNum, nonCaliTag...)
 	}
 

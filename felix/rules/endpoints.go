@@ -24,7 +24,7 @@ import (
 	"golang.org/x/crypto/sha3"
 
 	"github.com/projectcalico/calico/felix/hashutils"
-	. "github.com/projectcalico/calico/felix/iptables"
+	. "github.com/projectcalico/calico/felix/ipfw"
 	"github.com/projectcalico/calico/felix/proto"
 )
 
@@ -35,7 +35,7 @@ const (
 
 func (r *DefaultRuleRenderer) WorkloadEndpointToIptablesChains(
 	ifaceName string,
-	epMarkMapper EndpointMarkMapper,
+	epMarkMapper EndpointTagMapper,
 	adminUp bool,
 	ingressPolicies []*PolicyGroup,
 	egressPolicies []*PolicyGroup,
@@ -95,7 +95,7 @@ func (r *DefaultRuleRenderer) WorkloadEndpointToIptablesChains(
 
 func (r *DefaultRuleRenderer) HostEndpointToFilterChains(
 	ifaceName string,
-	epMarkMapper EndpointMarkMapper,
+	epMarkMapper EndpointTagMapper,
 	ingressPolicies []*PolicyGroup,
 	egressPolicies []*PolicyGroup,
 	ingressForwardPolicies []*PolicyGroup,
@@ -290,15 +290,15 @@ const (
 	chainTypeForward
 )
 
-func (r *DefaultRuleRenderer) endpointSetMarkChain(
+func (r *DefaultRuleRenderer) endpointSetTagChain(
 	name string,
-	epMarkMapper EndpointMarkMapper,
+	epTagMapper EndpointTagMapper,
 	endpointPrefix string,
 ) *Chain {
 	rules := []Rule{}
 	chainName := EndpointChainName(endpointPrefix, name)
 
-	if endPointMark, err := epMarkMapper.GetEndpointMark(name); err == nil {
+	if endPointTag, err := epTagMapper.GetEndpointTag(name); err == nil {
 		// Set endpoint mark.
 		rules = append(rules, Rule{
 			Action: SetMaskedMarkAction{
