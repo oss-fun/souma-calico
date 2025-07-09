@@ -391,8 +391,8 @@ func (r *DefaultRuleRenderer) endpointTagDispatchChains(
 	// At the end of set tag chain, set non-cali endpoint tag. A non-cali endpoint tag is used when a forward packet
 	// whose incoming interface is neither a workload nor a host endpoint.
 	rootSetTagRules = append(rootSetTagRules, Rule{
-		Action: SetMaskedTagAction{
-			Tag: r.IpfwTagNonCaliEndpoint,
+		Action: TagAction{
+			TagNumber: r.IpfwTagNonCaliEndpoint,
 		},
 		Comment: []string{"Non-Cali endpoint tag"},
 	})

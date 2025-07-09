@@ -275,14 +275,14 @@ type Config struct {
 
 	WorkloadIfacePrefixes []string
 
-	ipfwMarkAccept   uint32
-	ipfwMarkPass     uint32
-	ipfwMarkScratch0 uint32
-	ipfwMarkScratch1 uint32
-	ipfwMarkEndpoint uint32
+	IpfwMarkAccept   uint32
+	IpfwMarkPass     uint32
+	IpfwMarkScratch0 uint32
+	IpfwMarkScratch1 uint32
+	IpfwMarkEndpoint uint32
 	// ipfwMarkNonCaliEndpoint is an endpoint mark which is reserved
 	// to mark non-calico (workload or host) endpoint.
-	ipfwTagNonCaliEndpoint []uint16
+	IpfwTagNonCaliEndpoint []uint16
 
 	OpenStackMetadataIP          net.IP
 	OpenStackMetadataPort        uint16
@@ -315,11 +315,11 @@ type Config struct {
 	WireguardEncryptHostTraffic bool
 	RouteSource                 string
 
-	ipfwLogPrefix         string
+	IpfwLogPrefix         string
 	EndpointToHostAction      string
-	ipfwFilterAllowAction string
-	ipfwMangleAllowAction string
-	ipfwFilterDenyAction  string
+	IpfwFilterAllowAction string
+	IpfwMangleAllowAction string
+	IpfwFilterDenyAction  string
 
 	FailsafeInboundHostPorts  []config.ProtoPort
 	FailsafeOutboundHostPorts []config.ProtoPort
@@ -327,7 +327,7 @@ type Config struct {
 	DisableConntrackInvalid bool
 
 	NATPortRange                       numorstring.Port
-	ipfwNATOutgoingInterfaceFilter string
+	IpfwNATOutgoingInterfaceFilter string
 
 	NATOutgoingAddress             net.IP
 	BPFEnabled                     bool
