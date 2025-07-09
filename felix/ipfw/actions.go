@@ -39,7 +39,8 @@ func (a CountAction) String() string {
 }
 
 type CallAction struct {
-	TypeCall struct{}
+	TypeCall   struct{}
+	Target     string
 	RuleNumber uint16
 }
 
@@ -57,6 +58,7 @@ func (a ReturnAction) String() string {
 
 type SkiptoAction struct {
 	TypeSkipto struct{}
+	Target     string
 	RuleNumber uint16
 }
 

@@ -177,12 +177,12 @@ func (r *DefaultRuleRenderer) hostDispatchChains(
 		// interface in the `endpoints` map.
 		fromEndRules = []Rule{
 			Rule{
-				Action: SkiptoAction{RuleNumber: GetChainNumToName(EndpointChainName(HostFromEndpointPfx, defaultIfaceName))},
+				Action: SkiptoAction{Target: EndpointChainName(HostFromEndpointPfx, defaultIfaceName)},
 			},
 		}
 		fromEndForwardRules = []Rule{
 			Rule{
-				Action: SkiptoAction{RuleNumber: GetChainNumToName(EndpointChainName(HostFromEndpointForwardPfx, defaultIfaceName))},
+				Action: SkiptoAction{Target: EndpointChainName(HostFromEndpointForwardPfx, defaultIfaceName)},
 			},
 		}
 
@@ -202,11 +202,11 @@ func (r *DefaultRuleRenderer) hostDispatchChains(
 		}
 
 		toEndRules = append(toEndRules, Rule{
-			Action: SkiptoAction{RuleNumber: GetChainNumToName(EndpointChainName(HostToEndpointPfx, defaultIfaceName))},
+			Action: SkiptoAction{Target: EndpointChainName(HostToEndpointPfx, defaultIfaceName)},
 		})
 		toEndForwardRules = []Rule{
 			Rule{
-				Action: SkiptoAction{RuleNumber: GetChainNumToName(EndpointChainName(HostToEndpointForwardPfx, defaultIfaceName))},
+				Action: SkiptoAction{Target: EndpointChainName(HostToEndpointForwardPfx, defaultIfaceName)},
 			},
 		}
 	}
@@ -297,7 +297,7 @@ func (r *DefaultRuleRenderer) interfaceNameDispatchChains(
 			func(name string) MatchCriteria { return Match().InInterface(name) },
 			func(pfx, name string) Action {
 				return SkiptoAction{
-					RuleNumber: GetChainNumToName(EndpointChainName(pfx, name)),
+					Target: EndpointChainName(pfx, name),
 				}
 			},
 			fromEndRules,
@@ -317,7 +317,7 @@ func (r *DefaultRuleRenderer) interfaceNameDispatchChains(
 			func(name string) MatchCriteria { return Match().OutInterface(name) },
 			func(pfx, name string) Action {
 				return SkiptoAction{
-					RuleNumber: GetChainNumToName(EndpointChainName(pfx, name)),
+					Target: EndpointChainName(pfx, name),
 				}
 			},
 			toEndRules,
@@ -365,7 +365,7 @@ func (r *DefaultRuleRenderer) endpointTagDispatchChains(
 				func(name string) MatchCriteria { return Match().InInterface(name) },
 				func(pfx, name string) Action {
 					return SkiptoAction{
-						RuleNumber: GetChainNumToName(EndpointChainName(pfx, name)),
+						Target: EndpointChainName(pfx, name),
 					}
 				},
 				nil,
@@ -418,7 +418,7 @@ func (r *DefaultRuleRenderer) endpointTagDispatchChains(
 				rootFromTagRules = append(rootFromTagRules, Rule{
 					Match: Match().TagMatches(endPointTag),
 					Action: SkiptoAction{
-						RuleNumber: GetChainNumToName(EndpointChainName(fromTagPrefixes[index], name)),
+						Target: EndpointChainName(fromTagPrefixes[index], name),
 					},
 				})
 			}
@@ -490,7 +490,7 @@ func (r *DefaultRuleRenderer) buildSingleDispatchChains(
 				// return to this chain.  This prevents packets from traversing the
 				// rest of the root chain once we've found their prefix.
 				Action: SkiptoAction{
-					RuleNumber: GetChainNumToName(childChainName),
+					Target: childChainName,
 				},
 			})
 
