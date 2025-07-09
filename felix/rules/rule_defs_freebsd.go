@@ -275,14 +275,14 @@ type Config struct {
 
 	WorkloadIfacePrefixes []string
 
-	IpfwMarkAccept   uint32
-	IpfwMarkPass     uint32
-	IpfwMarkScratch0 uint32
-	IpfwMarkScratch1 uint32
-	IpfwMarkEndpoint uint32
+	IpfwTagAccept   uint16
+	IpfwTagPass     uint16
+	IpfwTagScratch0 uint16
+	IpfwTagScratch1 uint16
+	IpfwTagEndpoint uint16
 	// ipfwMarkNonCaliEndpoint is an endpoint mark which is reserved
 	// to mark non-calico (workload or host) endpoint.
-	IpfwTagNonCaliEndpoint []uint16
+	IpfwTagNonCaliEndpoint uint16
 
 	OpenStackMetadataIP          net.IP
 	OpenStackMetadataPort        uint16

@@ -416,7 +416,7 @@ func (r *DefaultRuleRenderer) endpointTagDispatchChains(
 				// implement each name into root rules for from-endpoint-tag chain.
 				log.WithField("ifaceName", name).Debug("Adding rule to from tag chain")
 				rootFromTagRules = append(rootFromTagRules, Rule{
-					Match: Match().TagMatches(endPointTag),
+					Match: Match().Tagged(endPointTag),
 					Action: SkiptoAction{
 						Target: EndpointChainName(fromTagPrefixes[index], name),
 					},
@@ -427,10 +427,10 @@ func (r *DefaultRuleRenderer) endpointTagDispatchChains(
 	}
 
 	// Finalizing with a drop/reject rule.
-	log.Debugf("Adding %s rules at end of root from tag chains.", r.IptablesFilterDenyAction())
+	log.Debugf("Adding %s rules at end of root from tag chains.", r.IpfwFilterDenyAction())
 	rootFromTagRules = append(rootFromTagRules, Rule{
 		Match:   Match(),
-		Action:  r.IptablesFilterDenyAction(),
+		Action:  r.IpfwFilterDenyAction(),
 		Comment: []string{"Unknown interface"},
 	})
 
