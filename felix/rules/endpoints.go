@@ -33,7 +33,7 @@ const (
 	alwaysAllowIPIPEncap  = true
 )
 
-func (r *DefaultRuleRenderer) WorkloadEndpointToIptablesChains(
+func (r *DefaultRuleRenderer) WorkloadEndpointToIpfwChains(
 	ifaceName string,
 	epMarkMapper EndpointTagMapper,
 	adminUp bool,
@@ -46,7 +46,7 @@ func (r *DefaultRuleRenderer) WorkloadEndpointToIptablesChains(
 	result := []*Chain{}
 	result = append(result,
 		// Chain for traffic _to_ the endpoint.
-		r.endpointIptablesChain(
+		r.endpointIpfwChain(
 			ingressPolicies,
 			profileIDs,
 			ifaceName,
@@ -63,7 +63,7 @@ func (r *DefaultRuleRenderer) WorkloadEndpointToIptablesChains(
 		// Chain for traffic _from_ the endpoint.
 		// Encap traffic is blocked by default from workload endpoints
 		// unless explicitly overridden.
-		r.endpointIptablesChain(
+		r.endpointIpfwChain(
 			egressPolicies,
 			profileIDs,
 			ifaceName,
@@ -79,23 +79,12 @@ func (r *DefaultRuleRenderer) WorkloadEndpointToIptablesChains(
 		),
 	)
 
-	if r.KubeIPVSSupportEnabled {
-		// Chain for setting endpoint mark of an endpoint.
-		result = append(result,
-			r.endpointSetMarkChain(
-				ifaceName,
-				epMarkMapper,
-				SetEndPointMarkPfx,
-			),
-		)
-	}
-
 	return result
 }
 
 func (r *DefaultRuleRenderer) HostEndpointToFilterChains(
 	ifaceName string,
-	epMarkMapper EndpointTagMapper,
+	epTagMapper EndpointTagMapper,
 	ingressPolicies []*PolicyGroup,
 	egressPolicies []*PolicyGroup,
 	ingressForwardPolicies []*PolicyGroup,
@@ -106,7 +95,7 @@ func (r *DefaultRuleRenderer) HostEndpointToFilterChains(
 	result := []*Chain{}
 	result = append(result,
 		// Chain for output traffic _to_ the endpoint.
-		r.endpointIptablesChain(
+		r.endpointIpfwChain(
 			egressPolicies,
 			profileIDs,
 			ifaceName,
@@ -121,7 +110,7 @@ func (r *DefaultRuleRenderer) HostEndpointToFilterChains(
 			alwaysAllowIPIPEncap,
 		),
 		// Chain for input traffic _from_ the endpoint.
-		r.endpointIptablesChain(
+		r.endpointIpfwChain(
 			ingressPolicies,
 			profileIDs,
 			ifaceName,
@@ -136,7 +125,7 @@ func (r *DefaultRuleRenderer) HostEndpointToFilterChains(
 			alwaysAllowIPIPEncap,
 		),
 		// Chain for forward traffic _to_ the endpoint.
-		r.endpointIptablesChain(
+		r.endpointIpfwChain(
 			egressForwardPolicies,
 			profileIDs,
 			ifaceName,
@@ -151,7 +140,7 @@ func (r *DefaultRuleRenderer) HostEndpointToFilterChains(
 			alwaysAllowIPIPEncap,
 		),
 		// Chain for forward traffic _from_ the endpoint.
-		r.endpointIptablesChain(
+		r.endpointIpfwChain(
 			ingressForwardPolicies,
 			profileIDs,
 			ifaceName,
@@ -167,17 +156,6 @@ func (r *DefaultRuleRenderer) HostEndpointToFilterChains(
 		),
 	)
 
-	if r.KubeIPVSSupportEnabled {
-		// Chain for setting endpoint mark of an endpoint.
-		result = append(result,
-			r.endpointSetMarkChain(
-				ifaceName,
-				epMarkMapper,
-				SetEndPointMarkPfx,
-			),
-		)
-	}
-
 	return result
 }
 
@@ -191,7 +169,7 @@ func (r *DefaultRuleRenderer) HostEndpointToMangleEgressChains(
 		// Chain for output traffic _to_ the endpoint.  Note, we use RETURN here rather than
 		// ACCEPT because the mangle table is typically used, if at all, for packet
 		// manipulations that might need to apply to our allowed traffic.
-		r.endpointIptablesChain(
+		r.endpointIpfwChain(
 			egressPolicies,
 			profileIDs,
 			ifaceName,
@@ -213,7 +191,7 @@ func (r *DefaultRuleRenderer) HostEndpointToRawEgressChain(
 	egressPolicies []*PolicyGroup,
 ) *Chain {
 	log.WithField("ifaceName", ifaceName).Debug("Rendering raw (untracked) host endpoint egress chain.")
-	return r.endpointIptablesChain(
+	return r.endpointIpfwChain(
 		egressPolicies,
 		nil, // We don't render profiles into the raw table.
 		ifaceName,
@@ -223,7 +201,7 @@ func (r *DefaultRuleRenderer) HostEndpointToRawEgressChain(
 		ChainFailsafeOut,
 		chainTypeUntracked,
 		true, // Host endpoints are always admin up.
-		AcceptAction{},
+		AllowAction{},
 		alwaysAllowVXLANEncap,
 		alwaysAllowIPIPEncap,
 	)
@@ -239,7 +217,7 @@ func (r *DefaultRuleRenderer) HostEndpointToRawChains(
 		// Chain for traffic _to_ the endpoint.
 		r.HostEndpointToRawEgressChain(ifaceName, egressPolicies),
 		// Chain for traffic _from_ the endpoint.
-		r.endpointIptablesChain(
+		r.endpointIpfwChain(
 			ingressPolicies,
 			nil, // We don't render profiles into the raw table.
 			ifaceName,
@@ -249,7 +227,7 @@ func (r *DefaultRuleRenderer) HostEndpointToRawChains(
 			ChainFailsafeIn,
 			chainTypeUntracked,
 			true, // Host endpoints are always admin up.
-			AcceptAction{},
+			AllowAction{},
 			alwaysAllowVXLANEncap,
 			alwaysAllowIPIPEncap,
 		),
@@ -264,7 +242,7 @@ func (r *DefaultRuleRenderer) HostEndpointToMangleIngressChains(
 	return []*Chain{
 		// Chain for traffic _from_ the endpoint.  Pre-DNAT policy does not apply to
 		// outgoing traffic through a host endpoint.
-		r.endpointIptablesChain(
+		r.endpointIpfwChain(
 			preDNATPolicies,
 			nil, // We don't render profiles into the raw table.
 			ifaceName,
@@ -301,9 +279,9 @@ func (r *DefaultRuleRenderer) endpointSetTagChain(
 	if endPointTag, err := epTagMapper.GetEndpointTag(name); err == nil {
 		// Set endpoint mark.
 		rules = append(rules, Rule{
-			Action: SetMaskedMarkAction{
-				Mark: endPointMark,
-				Mask: epMarkMapper.GetMask()},
+			Action: TagAction{
+				TagNumber: endPointTag,
+			},
 		})
 	}
 	return &Chain{
@@ -311,7 +289,7 @@ func (r *DefaultRuleRenderer) endpointSetTagChain(
 		Rules: rules,
 	}
 }
-func (r *DefaultRuleRenderer) PolicyGroupToIptablesChains(group *PolicyGroup) []*Chain {
+func (r *DefaultRuleRenderer) PolicyGroupToIpfwChains(group *PolicyGroup) []*Chain {
 	rules := make([]Rule, 0, len(group.PolicyNames)*2-1)
 	polChainPrefix := PolicyInboundPfx
 	if group.Direction == PolicyDirectionOutbound {
@@ -328,7 +306,7 @@ func (r *DefaultRuleRenderer) PolicyGroupToIptablesChains(group *PolicyGroup) []
 			// is handled differently in the per-endpoint chain because we need
 			// to continue processing in the same chain on a pass rule.
 			rules = append(rules, Rule{
-				Match:   Match().MarkNotClear(r.IptablesMarkPass | r.IptablesMarkAccept),
+				Match:   Match().Tagged(r.IpfwTagPass | r.IpfwTagAccept),
 				Action:  ReturnAction{},
 				Comment: []string{"Return on verdict"},
 			})
@@ -342,7 +320,7 @@ func (r *DefaultRuleRenderer) PolicyGroupToIptablesChains(group *PolicyGroup) []
 		} else {
 			// We're not the first rule in a block, only jump to this policy if
 			// the previous policy didn't set a mark bit.
-			match = Match().MarkClear(r.IptablesMarkPass | r.IptablesMarkAccept)
+			match = Match().Tagged(r.IpfwTagPass | r.IpfwTagAccept)
 		}
 
 		chainToJumpTo := PolicyChainName(
@@ -351,7 +329,7 @@ func (r *DefaultRuleRenderer) PolicyGroupToIptablesChains(group *PolicyGroup) []
 		)
 		rules = append(rules, Rule{
 			Match:  match,
-			Action: JumpAction{Target: chainToJumpTo},
+			Action: CallAction{Target: chainToJumpTo},
 		})
 	}
 	return []*Chain{{
@@ -360,7 +338,7 @@ func (r *DefaultRuleRenderer) PolicyGroupToIptablesChains(group *PolicyGroup) []
 	}}
 }
 
-func (r *DefaultRuleRenderer) endpointIptablesChain(policyGroups []*PolicyGroup, profileIds []string, name string, policyPrefix PolicyChainNamePrefix, profilePrefix ProfileChainNamePrefix, endpointPrefix string, failsafeChain string, chainType endpointChainType, adminUp bool, allowAction Action, allowVXLANEncap bool, allowIPIPEncap bool) *Chain {
+func (r *DefaultRuleRenderer) endpointIpfwChain(policyGroups []*PolicyGroup, profileIds []string, name string, policyPrefix PolicyChainNamePrefix, profilePrefix ProfileChainNamePrefix, endpointPrefix string, failsafeChain string, chainType endpointChainType, adminUp bool, allowAction Action, allowVXLANEncap bool, allowIPIPEncap bool) *Chain {
 	rules := []Rule{}
 	chainName := EndpointChainName(endpointPrefix, name)
 
@@ -368,7 +346,7 @@ func (r *DefaultRuleRenderer) endpointIptablesChain(policyGroups []*PolicyGroup,
 		// Endpoint is admin-down, drop all traffic to/from it.
 		rules = append(rules, Rule{
 			Match:   Match(),
-			Action:  r.IptablesFilterDenyAction(),
+			Action:  r.IpfwFilterDenyAction(),
 			Comment: []string{"Endpoint admin disabled"},
 		})
 		return &Chain{
@@ -386,7 +364,7 @@ func (r *DefaultRuleRenderer) endpointIptablesChain(policyGroups []*PolicyGroup,
 	// First set up failsafes.
 	if failsafeChain != "" {
 		rules = append(rules, Rule{
-			Action: JumpAction{Target: failsafeChain},
+			Action: CallAction{Target: failsafeChain},
 		})
 	}
 
@@ -394,26 +372,10 @@ func (r *DefaultRuleRenderer) endpointIptablesChain(policyGroups []*PolicyGroup,
 	// set one of the bits to return their result (or leave the bits unset if
 	// there's no match).
 	rules = append(rules, Rule{
-		Action: ClearMarkAction{
-			Mark: r.IptablesMarkAccept | r.IptablesMarkPass,
+		Action: TagAction{
+			TagNumber: r.IpfwTagAccept | r.IpfwTagPass,
 		},
 	})
-
-	if !allowVXLANEncap {
-		rules = append(rules, Rule{
-			Match: Match().ProtocolNum(ProtoUDP).
-				DestPorts(uint16(r.Config.VXLANPort)),
-			Action:  r.IptablesFilterDenyAction(),
-			Comment: []string{fmt.Sprintf("%s VXLAN encapped packets originating in workloads", r.IptablesFilterDenyAction())},
-		})
-	}
-	if !allowIPIPEncap {
-		rules = append(rules, Rule{
-			Match:   Match().ProtocolNum(ProtoIPIP),
-			Action:  r.IptablesFilterDenyAction(),
-			Comment: []string{fmt.Sprintf("%s IPinIP encapped packets originating in workloads", r.IptablesFilterDenyAction())},
-		})
-	}
 
 	if len(policyGroups) > 0 {
 		// Then, jump to each policy (or group) in turn.
@@ -435,22 +397,22 @@ func (r *DefaultRuleRenderer) endpointIptablesChain(policyGroups []*PolicyGroup,
 			for _, chainToJumpTo := range chainsToJumpTo {
 				// If a previous policy/group didn't set the "pass" mark, jump to the policy.
 				rules = append(rules, Rule{
-					Match:  Match().MarkClear(r.IptablesMarkPass),
-					Action: JumpAction{Target: chainToJumpTo},
+					Match:  Match().Tagged(r.IpfwTagPass),
+					Action: CallAction{Target: chainToJumpTo},
 				})
 				// If policy marked packet as accepted, it returns, setting the accept
 				// mark bit.
 				if chainType == chainTypeUntracked {
 					// For an untracked policy, map allow to "NOTRACK and ALLOW".
 					rules = append(rules, Rule{
-						Match:  Match().MarkSingleBitSet(r.IptablesMarkAccept),
-						Action: NoTrackAction{},
+						Match:  Match().Tagged(r.IpfwTagAccept),
+						Action: CountAction{}, // NoTrackAction{}
 					})
 				}
 				// If accept bit is set, return from this chain.  We don't immediately
 				// accept because there may be other policy still to apply.
 				rules = append(rules, Rule{
-					Match:   Match().MarkSingleBitSet(r.IptablesMarkAccept),
+					Match:   Match().Tagged(r.IpfwTagAccept),
 					Action:  ReturnAction{},
 					Comment: []string{"Return if policy accepted"},
 				})
@@ -464,9 +426,9 @@ func (r *DefaultRuleRenderer) endpointIptablesChain(policyGroups []*PolicyGroup,
 			// For untracked and pre-DNAT rules, we don't do that because there may be
 			// normal rules still to be applied to the packet in the filter table.
 			rules = append(rules, Rule{
-				Match:   Match().MarkClear(r.IptablesMarkPass),
-				Action:  r.IptablesFilterDenyAction(),
-				Comment: []string{fmt.Sprintf("%s if no policies passed packet", r.IptablesFilterDenyAction())},
+				Match:   Match().Tagged(r.IpfwTagPass),
+				Action:  r.IpfwFilterDenyAction(),
+				Comment: []string{fmt.Sprintf("%s if no policies passed packet", r.IpfwFilterDenyAction())},
 			})
 		}
 
@@ -474,7 +436,7 @@ func (r *DefaultRuleRenderer) endpointIptablesChain(policyGroups []*PolicyGroup,
 		// Forwarded traffic is allowed when there are no policies with
 		// applyOnForward that apply to this endpoint (and in this direction).
 		rules = append(rules, Rule{
-			Action:  SetMarkAction{Mark: r.IptablesMarkAccept},
+			Action:  TagAction{TagNumber: r.IpfwTagAccept},
 			Comment: []string{"Allow forwarded traffic by default"},
 		})
 		rules = append(rules, Rule{
@@ -488,11 +450,11 @@ func (r *DefaultRuleRenderer) endpointIptablesChain(policyGroups []*PolicyGroup,
 		for _, profileID := range profileIds {
 			profChainName := ProfileChainName(profilePrefix, &proto.ProfileID{Name: profileID})
 			rules = append(rules,
-				Rule{Action: JumpAction{Target: profChainName}},
+				Rule{Action: CallAction{Target: profChainName}},
 				// If policy marked packet as accepted, it returns, setting the
 				// accept mark bit.  If that is set, return from this chain.
 				Rule{
-					Match:   Match().MarkSingleBitSet(r.IptablesMarkAccept),
+					Match:   Match().Tagged(r.IpfwTagAccept),
 					Action:  ReturnAction{},
 					Comment: []string{"Return if profile accepted"},
 				})
@@ -506,8 +468,8 @@ func (r *DefaultRuleRenderer) endpointIptablesChain(policyGroups []*PolicyGroup,
 		// if dropIfNoProfilesMatched {
 		rules = append(rules, Rule{
 			Match:   Match(),
-			Action:  r.IptablesFilterDenyAction(),
-			Comment: []string{fmt.Sprintf("%s if no profiles matched", r.IptablesFilterDenyAction())},
+			Action:  r.IpfwFilterDenyAction(),
+			Comment: []string{fmt.Sprintf("%s if no profiles matched", r.IpfwFilterDenyAction())},
 		})
 		// }
 	}
@@ -520,19 +482,19 @@ func (r *DefaultRuleRenderer) endpointIptablesChain(policyGroups []*PolicyGroup,
 
 func (r *DefaultRuleRenderer) appendConntrackRules(rules []Rule, allowAction Action) []Rule {
 	// Allow return packets for established connections.
-	if allowAction != (AcceptAction{}) {
+	if allowAction != (AllowAction{}) {
 		// If we've been asked to return instead of accept the packet immediately,
 		// make sure we flag the packet as allowed.
 		rules = append(rules,
 			Rule{
-				Match:  Match().ConntrackState("RELATED,ESTABLISHED"),
-				Action: SetMarkAction{Mark: r.IptablesMarkAccept},
+				Match:  Match().ConntrackState("established"),
+				Action: TagAction{TagNumber: r.IpfwTagAccept},
 			},
 		)
 	}
 	rules = append(rules,
 		Rule{
-			Match:  Match().ConntrackState("RELATED,ESTABLISHED"),
+			Match:  Match().ConntrackState("established"),
 			Action: allowAction,
 		},
 	)
@@ -540,8 +502,8 @@ func (r *DefaultRuleRenderer) appendConntrackRules(rules []Rule, allowAction Act
 		// Drop packets that aren't either a valid handshake or part of an established
 		// connection.
 		rules = append(rules, Rule{
-			Match:  Match().ConntrackState("INVALID"),
-			Action: r.IptablesFilterDenyAction(),
+			Match:  Match().ConntrackState("setup keep-state"),
+			Action: r.IpfwFilterDenyAction(),
 		})
 	}
 	return rules
