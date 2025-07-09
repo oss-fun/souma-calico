@@ -18,8 +18,8 @@ import (
 	"sort"
 
 	log "github.com/sirupsen/logrus"
-
-	. "github.com/projectcalico/calico/felix/iptables"
+	
+	. "github.com/projectcalico/calico/felix/ipfw"
 	"github.com/projectcalico/calico/felix/proto"
 	"github.com/projectcalico/calico/felix/stringutils"
 )
@@ -39,7 +39,7 @@ func (r *DefaultRuleRenderer) WorkloadDispatchChains(
 	endRules := []Rule{
 		Rule{
 			Match:   Match(),
-			Action:  r.IptablesFilterDenyAction(),
+			Action:  r.IpfwFilterDenyAction(),
 			Comment: []string{"Unknown interface"},
 		},
 	}
@@ -68,7 +68,7 @@ func (r *DefaultRuleRenderer) WorkloadInterfaceAllowChains(
 	endRules := []Rule{
 		{
 			Match:   Match(),
-			Action:  r.IptablesFilterDenyAction(),
+			Action:  r.IpfwFilterDenyAction(),
 			Comment: []string{"Unknown interface"},
 		},
 	}
@@ -87,7 +87,7 @@ func (r *DefaultRuleRenderer) WorkloadInterfaceAllowChains(
 		WorkloadPfxSpecialAllow,
 		func(name string) MatchCriteria { return Match().OutInterface(name) },
 		func(pfx, name string) Action {
-			return AcceptAction{}
+			return AllowAction{}
 		},
 		endRules,
 	)
@@ -177,12 +177,12 @@ func (r *DefaultRuleRenderer) hostDispatchChains(
 		// interface in the `endpoints` map.
 		fromEndRules = []Rule{
 			Rule{
-				Action: GotoAction{Target: EndpointChainName(HostFromEndpointPfx, defaultIfaceName)},
+				Action: SkiptoAction{RuleNumber: GetChainNumToName(EndpointChainName(HostFromEndpointPfx, defaultIfaceName))},
 			},
 		}
 		fromEndForwardRules = []Rule{
 			Rule{
-				Action: GotoAction{Target: EndpointChainName(HostFromEndpointForwardPfx, defaultIfaceName)},
+				Action: SkiptoAction{RuleNumber: GetChainNumToName(EndpointChainName(HostFromEndpointForwardPfx, defaultIfaceName))},
 			},
 		}
 
@@ -202,11 +202,11 @@ func (r *DefaultRuleRenderer) hostDispatchChains(
 		}
 
 		toEndRules = append(toEndRules, Rule{
-			Action: GotoAction{Target: EndpointChainName(HostToEndpointPfx, defaultIfaceName)},
+			Action: SkiptoAction{RuleNumber: GetChainNumToName(EndpointChainName(HostToEndpointPfx, defaultIfaceName))},
 		})
 		toEndForwardRules = []Rule{
 			Rule{
-				Action: GotoAction{Target: EndpointChainName(HostToEndpointForwardPfx, defaultIfaceName)},
+				Action: SkiptoAction{RuleNumber: GetChainNumToName(EndpointChainName(HostToEndpointForwardPfx, defaultIfaceName))},
 			},
 		}
 	}
@@ -296,8 +296,8 @@ func (r *DefaultRuleRenderer) interfaceNameDispatchChains(
 			fromEndpointPfx,
 			func(name string) MatchCriteria { return Match().InInterface(name) },
 			func(pfx, name string) Action {
-				return GotoAction{
-					Target: EndpointChainName(pfx, name),
+				return SkiptoAction{
+					RuleNumber: GetChainNumToName(EndpointChainName(pfx, name)),
 				}
 			},
 			fromEndRules,
@@ -316,8 +316,8 @@ func (r *DefaultRuleRenderer) interfaceNameDispatchChains(
 			toEndpointPfx,
 			func(name string) MatchCriteria { return Match().OutInterface(name) },
 			func(pfx, name string) Action {
-				return GotoAction{
-					Target: EndpointChainName(pfx, name),
+				return SkiptoAction{
+					RuleNumber: GetChainNumToName(EndpointChainName(pfx, name)),
 				}
 			},
 			toEndRules,
@@ -364,8 +364,8 @@ func (r *DefaultRuleRenderer) endpointTagDispatchChains(
 				setTagPfx,
 				func(name string) MatchCriteria { return Match().InInterface(name) },
 				func(pfx, name string) Action {
-					return GotoAction{
-						Target: EndpointChainName(pfx, name),
+					return SkiptoAction{
+						RuleNumber: GetChainNumToName(EndpointChainName(pfx, name)),
 					}
 				},
 				nil,
@@ -383,7 +383,7 @@ func (r *DefaultRuleRenderer) endpointTagDispatchChains(
 		ifaceMatch := prefix + "+"
 		rootSetTagRules = append(rootSetTagRules, Rule{
 			Match:   Match().InInterface(ifaceMatch),
-			Action:  r.IptablesFilterDenyAction(),
+			Action:  r.IpfwFilterDenyAction(),
 			Comment: []string{"Unknown endpoint"},
 		})
 	}
@@ -392,8 +392,8 @@ func (r *DefaultRuleRenderer) endpointTagDispatchChains(
 	// whose incoming interface is neither a workload nor a host endpoint.
 	rootSetTagRules = append(rootSetTagRules, Rule{
 		Action: SetMaskedTagAction{
-			Tag: r.IptablesTagNonCaliEndpoint,
-			Mask: epTagMapper.GetMask()},
+			Tag: r.IpfwTagNonCaliEndpoint,
+		},
 		Comment: []string{"Non-Cali endpoint tag"},
 	})
 
@@ -416,9 +416,9 @@ func (r *DefaultRuleRenderer) endpointTagDispatchChains(
 				// implement each name into root rules for from-endpoint-tag chain.
 				log.WithField("ifaceName", name).Debug("Adding rule to from tag chain")
 				rootFromTagRules = append(rootFromTagRules, Rule{
-					Match: Match().TagMatchesWithMask(endPointTag, epTagMapper.GetMask()),
-					Action: GotoAction{
-						Target: EndpointChainName(fromTagPrefixes[index], name),
+					Match: Match().TagMatches(endPointTag),
+					Action: SkiptoAction{
+						RuleNumber: GetChainNumToName(EndpointChainName(fromTagPrefixes[index], name)),
 					},
 				})
 			}
@@ -489,8 +489,8 @@ func (r *DefaultRuleRenderer) buildSingleDispatchChains(
 				// Note: we use a goto here, which means that packets will not
 				// return to this chain.  This prevents packets from traversing the
 				// rest of the root chain once we've found their prefix.
-				Action: GotoAction{
-					Target: childChainName,
+				Action: SkiptoAction{
+					RuleNumber: GetChainNumToName(childChainName),
 				},
 			})
 

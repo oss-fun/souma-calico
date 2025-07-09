@@ -26,8 +26,8 @@ import (
 	"github.com/projectcalico/api/pkg/lib/numorstring"
 
 	"github.com/projectcalico/calico/felix/config"
-	"github.com/projectcalico/calico/felix/ipfwtable"
-	"github.com/projectcalico/calico/felix/ipfw"
+	"github.com/projectcalico/calico/felix/ipsets"
+	"github.com/projectcalico/calico/felix/iptables"
 	"github.com/projectcalico/calico/felix/proto"
 )
 
@@ -63,9 +63,9 @@ const (
 	IPSetIDNATOutgoingAllPools  = "all-ipam-pools"
 	IPSetIDNATOutgoingMasqPools = "masq-ipam-pools"
 
-	IpfwTableIDAllHostNets        = "all-hosts-net"
-	IpfwTableIDAllVXLANSourceNets = "all-vxlan-net"
-	IpfwTableIDThisHostIPs        = "this-host"
+	IPSetIDAllHostNets        = "all-hosts-net"
+	IPSetIDAllVXLANSourceNets = "all-vxlan-net"
+	IPSetIDThisHostIPs        = "this-host"
 
 	ChainFIPDnat = ChainNamePrefix + "fip-dnat"
 	ChainFIPSnat = ChainNamePrefix + "fip-snat"
@@ -275,8 +275,8 @@ func (r *DefaultRuleRenderer) ipSetConfig(ipVersion uint8) *ipsets.IPVersionConf
 }
 
 type Config struct {
-	IpfwTableConfigV4 *ipfwtable.IPVersionConfig
-	IpfwTableConfigV6 *ipfwtable.IPVersionConfig
+	IPSetConfigV4 *ipsets.IPVersionConfig
+	IPSetConfigV6 *ipsets.IPVersionConfig
 
 	WorkloadIfacePrefixes []string
 

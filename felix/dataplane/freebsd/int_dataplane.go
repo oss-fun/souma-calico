@@ -44,7 +44,6 @@ import (
 	"github.com/projectcalico/calico/felix/environment"
 	"github.com/projectcalico/calico/felix/idalloc"
 	"github.com/projectcalico/calico/felix/ifacemonitor"
-	"github.com/projectcalico/calico/felix/ipsets"
 	"github.com/projectcalico/calico/felix/ipfwtable"
 	"github.com/projectcalico/calico/felix/ipfw"
 	"github.com/projectcalico/calico/felix/ipfw/cmdshim"
@@ -267,7 +266,7 @@ type InternalDataplane struct {
 	sendDataplaneInSyncOnce sync.Once
 
 	allIpfwRuleSets    []*ipfw.Ruleset
-	ipfwTable          []common.IPSetsDataplane
+	ipfwTable          []common.IpfwTableDataplane
 
 	ipipManager *ipipManager
 

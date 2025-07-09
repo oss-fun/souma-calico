@@ -391,8 +391,8 @@ func StartDataplaneDriver(configParams *config.Config,
 			dpConfig.BPFDSROptoutCIDRs = configParams.BPFDSROptoutCIDRs
 		}
 
-		intDP := intdataplane.NewIntDataplaneDriver(dpConfig)
-		intDP.Start()
+		IntDP = intdataplane.NewIntDataplaneDriver(dpConfig)
+		IntDP.Start()
 
 		// Set source-destination-check on AWS EC2 instance.
 		check := apiv3.AWSSrcDstCheckOption(configParams.AWSSrcDstCheck)

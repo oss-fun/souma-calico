@@ -98,3 +98,6 @@ func NewRuleSet(name string, ipVersion uint8) *RuleSet {
 	}
 }
 
+func (r RuleSet) GetChainNum(name string) uint16 {
+	return r.chainNameToChain[name].GetStartRuleNum()
+}

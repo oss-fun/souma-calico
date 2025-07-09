@@ -86,8 +86,8 @@ const (
 	ChainDispatchFromHostEndpoint        = ChainNamePrefix + "from-host-endpoint"
 	ChainDispatchToHostEndpointForward   = ChainNamePrefix + "to-hep-forward"
 	ChainDispatchFromHostEndPointForward = ChainNamePrefix + "from-hep-forward"
-	ChainDispatchSetEndPointMark         = ChainNamePrefix + "set-endpoint-mark"
-	ChainDispatchFromEndPointMark        = ChainNamePrefix + "from-endpoint-mark"
+	ChainDispatchSetEndPointTag          = ChainNamePrefix + "set-endpoint-tag"
+	ChainDispatchFromEndPointTag         = ChainNamePrefix + "from-endpoint-tag"
 
 	ChainForwardCheck        = ChainNamePrefix + "forward-check"
 	ChainForwardEndpointMark = ChainNamePrefix + "forward-endpoint-mark"
@@ -100,7 +100,7 @@ const (
 	WorkloadPfxSpecialAllow = "ALLOW"
 	WorkloadFromEndpointPfx = ChainNamePrefix + "fw-"
 
-	SetEndPointMarkPfx = ChainNamePrefix + "sm-"
+	SetEndPointTagPfx = ChainNamePrefix + "sm-"
 
 	HostToEndpointPfx          = ChainNamePrefix + "th-"
 	HostFromEndpointPfx        = ChainNamePrefix + "fh-"
