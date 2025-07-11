@@ -17,6 +17,7 @@ package rules
 import (
 	"errors"
 	"hash/fnv"
+	"io"
 
 	"github.com/projectcalico/calico/felix/tagnum"
 )
@@ -45,8 +46,10 @@ type DefaultEPTagManager struct {
 func NewEndpointTagMapper(nonCaliTag []uint16) EndpointTagMapper {
 	tagNumManager := tagnum.NewTagNumManager("endpoint-ipfw-tag")
 
-	if len(nonCaliTag) != 0 {
-		tagNumManager.UsedNum = append(tagNumManager.UsedNum, nonCaliTag...)
+	for _, tag := range nonCaliTag {
+		if err := tagNumManager.SetUsedNum(tag); err != nil {
+			return nil
+		}
 	}
 
 	eptm := &DefaultEPTagManager {
@@ -80,10 +83,10 @@ func (eptm *DefaultEPTagManager) GetEndpointTag(ep string) (uint16, error) {
 
 	gotOne := false
 	for ; result < 65535; result++ {
-		if prospect == 0 {
+		if result == 0 {
 			continue
 		}
-		if _, exists := eptm.activeTagtoEndpoint[result]; !exists {
+		if _, exists := eptm.activeTagToEndpoint[result]; !exists {
 			gotOne = true
 			break
 		}
@@ -95,15 +98,34 @@ func (eptm *DefaultEPTagManager) GetEndpointTag(ep string) (uint16, error) {
 
 	eptm.setTag(ep, result)
 
-	return 
+	return result, nil
 }
 
 func (eptm *DefaultEPTagManager) ReleaseEndpointTag(ep string) {
-
+	if tag, ok := eptm.activeEndpointToTag[ep]; ok {
+		eptm.deleteTag(ep, tag)
+	}
 }
 
-func (eptm *DefaultEPTagManager) SetEndpointTag(ep string, tags uint16) error {
-	
+func (eptm *DefaultEPTagManager) SetEndpointTag(ep string, tag uint16) error {
+	if currentTag, ok := eptm.activeEndpointToTag[ep]; ok {
+		if currentTag != tag {
+			return errors.New("Different mark already exists")
+		}
+		return nil
+	}
+	if currentEP, ok := eptm.activeTagToEndpoint[tag]; ok {
+		if currentEP != ep {
+			return errors.New("Endpoint with this mark already exists")
+		}
+		return nil
+	}
+
+	if err := eptm.tagNumManager.SetUsedNum(tag); err != nil {
+		return err
+	}
+	eptm.setTag(ep, tag)
+	return nil	
 }
 
 func (eptm *DefaultEPTagManager) deleteTag(ep string, tag uint16) {

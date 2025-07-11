@@ -5,13 +5,11 @@ package tagnum
 import (
 	"fmt"
 	"sync"
-
-	"golang.org/x/exp/slices"
 )
 
 type TagNumManager struct {
 	name    string
-	UsedNum []uint16
+	usedNum map[uint16]bool
 
 	mutex   sync.Mutex
 }
@@ -20,16 +18,15 @@ func NewTagNumManager(tagName string) *TagNumManager {
 	return &TagNumManager{name: tagName}
 }
 
-func (mc *TagNumManager) NextTagNum() (uint16, error) {
-	mc.mutex.Lock()
-	defer mc.mutex.Unlock()
+func (tm *TagNumManager) NextTagNum() (uint16, error) {
+	tm.mutex.Lock()
+	defer tm.mutex.Unlock()
 
 	var result uint16
-	for i := 1; i <= 65535; i++ {
-		if slices.Contains(mc.UsedNum, uint16(i)) {
+	for ; result <= 65535; result++ {
+		if tm.usedNum[result] == true {
 			continue
 		}
-		result = uint16(i)
 		break
 	}
 
@@ -37,7 +34,17 @@ func (mc *TagNumManager) NextTagNum() (uint16, error) {
 		return 0, fmt.Errorf("NextTagNum Failed")
 	}
 
-	mc.UsedNum = append(mc.UsedNum, result)
+	if err := tm.SetUsedNum(result); err != nil {
+		return 0, err
+	}
 	return result, nil
 }
 
+func (tm *TagNumManager) SetUsedNum(n uint16) error {
+	if tm.usedNum[n] == true {
+		return fmt.Errorf("SetUsedNum Failed: tag %d already used.", n)
+	}
+
+	tm.usedNum[n] = true
+	return nil
+}
