@@ -21,46 +21,46 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/projectcalico/calico/felix/hashutils"
-	"github.com/projectcalico/calico/felix/ipsets"
-	"github.com/projectcalico/calico/felix/iptables"
+	"github.com/projectcalico/calico/felix/ipfwtable"
+	"github.com/projectcalico/calico/felix/ipfw"
 	"github.com/projectcalico/calico/felix/proto"
 )
 
 // ruleRenderer defined in rules_defs.go.
 
-func (r *DefaultRuleRenderer) PolicyToIptablesChains(policyID *proto.PolicyID, policy *proto.Policy, ipVersion uint8) []*iptables.Chain {
-	inbound := iptables.Chain{
+func (r *DefaultRuleRenderer) PolicyToIpfwChains(policyID *proto.PolicyID, policy *proto.Policy, ipVersion uint8) []*ipfw.Chain {
+	inbound := ipfw.Chain{
 		Name:  PolicyChainName(PolicyInboundPfx, policyID),
-		Rules: r.ProtoRulesToIptablesRules(policy.InboundRules, ipVersion, fmt.Sprintf("Policy %s ingress", policyID.Name)),
+		Rules: r.ProtoRulesToIpfwRules(policy.InboundRules, ipVersion, fmt.Sprintf("Policy %s ingress", policyID.Name)),
 	}
-	outbound := iptables.Chain{
+	outbound := ipfw.Chain{
 		Name:  PolicyChainName(PolicyOutboundPfx, policyID),
-		Rules: r.ProtoRulesToIptablesRules(policy.OutboundRules, ipVersion, fmt.Sprintf("Policy %s egress", policyID.Name)),
+		Rules: r.ProtoRulesToIpfwRules(policy.OutboundRules, ipVersion, fmt.Sprintf("Policy %s egress", policyID.Name)),
 	}
-	return []*iptables.Chain{&inbound, &outbound}
+	return []*ipfw.Chain{&inbound, &outbound}
 }
 
-func (r *DefaultRuleRenderer) ProfileToIptablesChains(profileID *proto.ProfileID, profile *proto.Profile, ipVersion uint8) (inbound, outbound *iptables.Chain) {
-	inbound = &iptables.Chain{
+func (r *DefaultRuleRenderer) ProfileToIpfwChains(profileID *proto.ProfileID, profile *proto.Profile, ipVersion uint8) (inbound, outbound *ipfw.Chain) {
+	inbound = &ipfw.Chain{
 		Name:  ProfileChainName(ProfileInboundPfx, profileID),
-		Rules: r.ProtoRulesToIptablesRules(profile.InboundRules, ipVersion, fmt.Sprintf("Profile %s ingress", profileID.Name)),
+		Rules: r.ProtoRulesToIpfwRules(profile.InboundRules, ipVersion, fmt.Sprintf("Profile %s ingress", profileID.Name)),
 	}
-	outbound = &iptables.Chain{
+	outbound = &ipfw.Chain{
 		Name:  ProfileChainName(ProfileOutboundPfx, profileID),
-		Rules: r.ProtoRulesToIptablesRules(profile.OutboundRules, ipVersion, fmt.Sprintf("Profile %s egress", profileID.Name)),
+		Rules: r.ProtoRulesToIpfwRules(profile.OutboundRules, ipVersion, fmt.Sprintf("Profile %s egress", profileID.Name)),
 	}
 	return
 }
 
-func (r *DefaultRuleRenderer) ProtoRulesToIptablesRules(protoRules []*proto.Rule, ipVersion uint8, chainComments ...string) []iptables.Rule {
-	var rules []iptables.Rule
+func (r *DefaultRuleRenderer) ProtoRulesToIpfwRules(protoRules []*proto.Rule, ipVersion uint8, chainComments ...string) []ipfw.Rule {
+	var rules []ipfw.Rule
 	for _, protoRule := range protoRules {
-		rules = append(rules, r.ProtoRuleToIptablesRules(protoRule, ipVersion)...)
+		rules = append(rules, r.ProtoRuleToIpfwRules(protoRule, ipVersion)...)
 	}
 	// Strip off any return rules at the end of the chain.  No matter their
 	// match criteria, they're effectively no-ops.
 	for len(rules) > 0 {
-		if _, ok := rules[len(rules)-1].Action.(iptables.ReturnAction); ok {
+		if _, ok := rules[len(rules)-1].Action.(ipfw.ReturnAction); ok {
 			rules = rules[:len(rules)-1]
 		} else {
 			break
@@ -68,7 +68,7 @@ func (r *DefaultRuleRenderer) ProtoRulesToIptablesRules(protoRules []*proto.Rule
 	}
 	if len(chainComments) > 0 {
 		if len(rules) == 0 {
-			rules = append(rules, iptables.Rule{})
+			rules = append(rules, ipfw.Rule{})
 		}
 		rules[0].Comment = append(rules[0].Comment, chainComments...)
 	}
@@ -143,20 +143,20 @@ func FilterRuleToIPVersion(ipVersion uint8, pRule *proto.Rule) *proto.Rule {
 	return &ruleCopy
 }
 
-func (r *DefaultRuleRenderer) ProtoRuleToIptablesRules(pRule *proto.Rule, ipVersion uint8) []iptables.Rule {
+func (r *DefaultRuleRenderer) ProtoRuleToIpfwRules(pRule *proto.Rule, ipVersion uint8) []ipfw.Rule {
 
 	ruleCopy := FilterRuleToIPVersion(ipVersion, pRule)
 	if ruleCopy == nil {
 		return nil
 	}
-	// There are a few areas where our data model doesn't fit with iptables, requiring us to
-	// render multiple iptables rules for one of our rules:
+	// There are a few areas where our data model doesn't fit with ipfw, requiring us to
+	// render multiple ipfw rules for one of our rules:
 	//
-	//     - iptables has a 15-port limit on the number of ports that can be in a single "multiport"
+	//     - ipfw has a 15-port limit on the number of ports that can be in a single "multiport"
 	//       match.  Although we can have more than one multiport match in a single rule, they would
 	//       be and-ed together, when our datamodel calls for them to be or-ed instead.
 	//
-	//     - iptables only supports a single source and a single destination CIDR match in a given
+	//     - ipfw only supports a single source and a single destination CIDR match in a given
 	//       rule, irrespective of negation (i.e. you can't have src==<CIDR1> && src!=<CIDR2>.
 	//       Our datamodel allows for a list of positive and a list of negative CIDR matches.
 	//
@@ -193,36 +193,35 @@ func (r *DefaultRuleRenderer) ProtoRuleToIptablesRules(pRule *proto.Rule, ipVers
 	//
 	// The matchBlockBuilder wraps up the above logic:
 	matchBlockBuilder := matchBlockBuilder{
-		markAllBlocksPass: r.IptablesMarkScratch0,
-		markThisBlockPass: r.IptablesMarkScratch1,
+		markAllBlocksPass: r.IpfwTagScratch0,
+		markThisBlockPass: r.IpfwTagScratch1,
 	}
 
 	// Port matches.  We only need to render blocks of ports if, in total, there's more than one
 	// source or more than one destination match that needs to be or-ed together.
 	//
-	// Split the port list into blocks of 15, as per iptables limit and add in the number of
+	// Split the port list into blocks of 15, as per ipfw limit and add in the number of
 	// named ports.
-	var ipSetConfig *ipsets.IPVersionConfig
+	var ipSetConfig *ipfwtable.IPVersionConfig
 	if ipVersion == 4 {
-		ipSetConfig = r.IPSetConfigV4
-	} else {
-		ipSetConfig = r.IPSetConfigV6
+		ipSetConfig = r.IpfwTableConfigV4
 	}
+
 	srcPortSplits := SplitPortList(ruleCopy.SrcPorts)
-	if len(srcPortSplits)+len(ruleCopy.SrcNamedPortIpSetIds) > 1 {
+	if len(srcPortSplits)+len(ruleCopy.SrcNamedPortIpfwTableIds) > 1 {
 		// Render a block for the source ports.
-		matchBlockBuilder.AppendPortMatchBlock(ipSetConfig, ruleCopy.Protocol, srcPortSplits, ruleCopy.SrcNamedPortIpSetIds, src)
+		matchBlockBuilder.AppendPortMatchBlock(ipSetConfig, ruleCopy.Protocol, srcPortSplits, ruleCopy.SrcNamedPortIpfwTableIds, src)
 		// And remove them from the rule since they're already handled.
 		ruleCopy.SrcPorts = nil
-		ruleCopy.SrcNamedPortIpSetIds = nil
+		ruleCopy.SrcNamedPortIpfwTableIds = nil
 	}
 	dstPortSplits := SplitPortList(ruleCopy.DstPorts)
-	if len(dstPortSplits)+len(ruleCopy.DstNamedPortIpSetIds) > 1 {
+	if len(dstPortSplits)+len(ruleCopy.DstNamedPortIpfwTableIds) > 1 {
 		// Render a block for the destination ports.
-		matchBlockBuilder.AppendPortMatchBlock(ipSetConfig, ruleCopy.Protocol, dstPortSplits, ruleCopy.DstNamedPortIpSetIds, dst)
+		matchBlockBuilder.AppendPortMatchBlock(ipSetConfig, ruleCopy.Protocol, dstPortSplits, ruleCopy.DstNamedPortIpfwTableIds, dst)
 		// And remove them from the rule since they're already handled.
 		ruleCopy.DstPorts = nil
-		ruleCopy.DstNamedPortIpSetIds = nil
+		ruleCopy.DstNamedPortIpfwTableIds = nil
 	}
 
 	// If there's more than one positive source/destination CIDR match, we have to render a block.
@@ -281,14 +280,14 @@ func (r *DefaultRuleRenderer) ProtoRuleToIptablesRules(pRule *proto.Rule, ipVers
 		// The rule needs to do more than one action. Render a rule that
 		// executes the match criteria and sets the given mark bit if it
 		// matches, then render the actions as separate rules below.
-		rs = append(rs, iptables.Rule{
+		rs = append(rs, ipfw.Rule{
 			Match:  match,
-			Action: iptables.SetMarkAction{Mark: markBit},
+			Action: ipfw.SetMarkAction{Mark: markBit},
 		})
-		match = iptables.Match().MarkSingleBitSet(markBit)
+		match = ipfw.Match().MarkSingleBitSet(markBit)
 	}
 	for _, action := range actions {
-		rs = append(rs, iptables.Rule{
+		rs = append(rs, ipfw.Rule{
 			Match:  match,
 			Action: action,
 		})
@@ -311,14 +310,14 @@ type matchBlockBuilder struct {
 	markAllBlocksPass uint32
 	markThisBlockPass uint32
 
-	Rules []iptables.Rule
+	Rules []ipfw.Rule
 }
 
 func (r *matchBlockBuilder) AppendPortMatchBlock(
-	ipSetConfig *ipsets.IPVersionConfig,
+	ipSetConfig *ipfwtable.IPVersionConfig,
 	protocol *proto.Protocol,
 	numericPortSplits [][]*proto.PortRange,
-	namedPortIPSetIDs []string,
+	namedPortIpfwTableIDs []string,
 	srcOrDst srcOrDst,
 ) {
 	// Write out the initial "reset" rule if this is the first block.
@@ -329,23 +328,23 @@ func (r *matchBlockBuilder) AppendPortMatchBlock(
 	logCxt := log.WithFields(log.Fields{
 		"protocol":     protocol,
 		"portSplits":   numericPortSplits,
-		"namedPortIDs": namedPortIPSetIDs,
+		"namedPortIDs": namedPortIpfwTableIDs,
 		"srcOrDst":     srcOrDst,
 	})
 	for _, split := range numericPortSplits {
-		m := appendProtocolMatch(iptables.Match(), protocol, logCxt)
+		m := appendProtocolMatch(ipfw.Match(), protocol, logCxt)
 		m = srcOrDst.AppendMatchPorts(m, split)
-		r.Rules = append(r.Rules, iptables.Rule{
+		r.Rules = append(r.Rules, ipfw.Rule{
 			Match:  m,
-			Action: iptables.SetMarkAction{Mark: markToSet},
+			Action: ipfw.SetMarkAction{Mark: markToSet},
 		})
 	}
 
-	for _, namedPortIPSetID := range namedPortIPSetIDs {
-		ipsetName := ipSetConfig.NameForMainIPSet(namedPortIPSetID)
-		r.Rules = append(r.Rules, iptables.Rule{
-			Match:  srcOrDst.MatchIPPortIPSet(ipsetName),
-			Action: iptables.SetMarkAction{Mark: markToSet},
+	for _, namedPortIpfwTableID := range namedPortIpfwTableIDs {
+		ipfwTableName := ipSetConfig.NameForMainIpfwTable(namedPortIpfwTableID)
+		r.Rules = append(r.Rules, ipfw.Rule{
+			Match:  srcOrDst.MatchIPPortIpfwTable(ipfwTableName),
+			Action: ipfw.SetMarkAction{Mark: markToSet},
 		})
 	}
 
@@ -361,9 +360,9 @@ func (r *matchBlockBuilder) AppendCIDRMatchBlock(cidrs []string, srcOrDst srcOrD
 
 	// Render the per-CIDR rules.
 	for _, cidr := range cidrs {
-		r.Rules = append(r.Rules, iptables.Rule{
+		r.Rules = append(r.Rules, ipfw.Rule{
 			Match:  srcOrDst.MatchNet(cidr),
-			Action: iptables.SetMarkAction{Mark: markToSet},
+			Action: ipfw.SetMarkAction{Mark: markToSet},
 		})
 	}
 
@@ -380,9 +379,9 @@ func (r *matchBlockBuilder) AppendNegatedCIDRMatchBlock(cidrs []string, srcOrDst
 	// This gives the desired "not any" behaviour.
 	for _, cidr := range cidrs {
 		r.Rules = append(r.Rules,
-			iptables.Rule{
+			ipfw.Rule{
 				Match:  srcOrDst.MatchNet(cidr),
-				Action: iptables.ClearMarkAction{Mark: r.markAllBlocksPass},
+				Action: ipfw.ClearMarkAction{Mark: r.markAllBlocksPass},
 			},
 		)
 	}
@@ -393,8 +392,8 @@ func (r *matchBlockBuilder) maybeAppendInitialRule(markBitsToSetInitially uint32
 		return
 	}
 	r.Rules = append(r.Rules,
-		iptables.Rule{
-			Action: iptables.SetMaskedMarkAction{
+		ipfw.Rule{
+			Action: ipfw.SetMaskedMarkAction{
 				Mark: markBitsToSetInitially,
 				Mask: r.markAllBlocksPass | r.markThisBlockPass,
 			},
@@ -438,9 +437,9 @@ func (r *matchBlockBuilder) finishPositiveBlock() {
 	//
 	//     <AllBlocks bit> &&= <ThisBlock bit>
 	//
-	r.Rules = append(r.Rules, iptables.Rule{
-		Match:  iptables.Match().MarkClear(r.markThisBlockPass),
-		Action: iptables.ClearMarkAction{Mark: r.markAllBlocksPass},
+	r.Rules = append(r.Rules, ipfw.Rule{
+		Match:  ipfw.Match().MarkClear(r.markThisBlockPass),
+		Action: ipfw.ClearMarkAction{Mark: r.markAllBlocksPass},
 	})
 }
 
@@ -453,18 +452,18 @@ const (
 )
 
 // MatchNet returns a new SourceNet or DestNet MatchCriteria for the given CIDR.
-func (sod srcOrDst) MatchNet(cidr string) iptables.MatchCriteria {
+func (sod srcOrDst) MatchNet(cidr string) ipfw.MatchCriteria {
 	switch sod {
 	case src:
-		return iptables.Match().SourceNet(cidr)
+		return ipfw.Match().SourceNet(cidr)
 	case dst:
-		return iptables.Match().DestNet(cidr)
+		return ipfw.Match().DestNet(cidr)
 	}
 	log.WithField("srcOrDst", sod).Panic("Unknown source or dest type.")
 	return nil
 }
 
-func (sod srcOrDst) AppendMatchPorts(m iptables.MatchCriteria, pr []*proto.PortRange) iptables.MatchCriteria {
+func (sod srcOrDst) AppendMatchPorts(m ipfw.MatchCriteria, pr []*proto.PortRange) ipfw.MatchCriteria {
 	switch sod {
 	case src:
 		return m.SourcePortRanges(pr)
@@ -475,12 +474,12 @@ func (sod srcOrDst) AppendMatchPorts(m iptables.MatchCriteria, pr []*proto.PortR
 	return nil
 }
 
-func (sod srcOrDst) MatchIPPortIPSet(setID string) iptables.MatchCriteria {
+func (sod srcOrDst) MatchIPPortIpfwTable(setID string) ipfw.MatchCriteria {
 	switch sod {
 	case src:
-		return iptables.Match().SourceIPPortSet(setID)
+		return ipfw.Match().SourceIPPortSet(setID)
 	case dst:
-		return iptables.Match().DestIPPortSet(setID)
+		return ipfw.Match().DestIPPortSet(setID)
 	}
 	log.WithField("srcOrDst", sod).Panic("Unknown source or dest type.")
 	return nil
@@ -489,7 +488,7 @@ func (sod srcOrDst) MatchIPPortIPSet(setID string) iptables.MatchCriteria {
 // SplitPortList splits the input list of ports into groups containing up to 15 port numbers.
 // If the input list is empty, it returns an empty slice.
 //
-// The requirement to split into groups of 15, comes from iptables' limit on the number of ports
+// The requirement to split into groups of 15, comes from ipfw' limit on the number of ports
 // "slots" in a multiport match.  A single port takes up one slot, a range of ports requires 2.
 func SplitPortList(ports []*proto.PortRange) (splits [][]*proto.PortRange) {
 	slotsAvailableInCurrentSplit := 15
@@ -518,27 +517,27 @@ func SplitPortList(ports []*proto.PortRange) (splits [][]*proto.PortRange) {
 	return
 }
 
-func (r *DefaultRuleRenderer) CalculateActions(pRule *proto.Rule, ipVersion uint8) (mark uint32, actions []iptables.Action) {
-	actions = []iptables.Action{}
+func (r *DefaultRuleRenderer) CalculateActions(pRule *proto.Rule, ipVersion uint8) (mark uint32, actions []ipfw.Action) {
+	actions = []ipfw.Action{}
 
 	switch pRule.Action {
 	case "", "allow":
 		// Allow needs to set the accept mark, and then return to the calling chain for
 		// further processing.
-		mark = r.IptablesMarkAccept
-		actions = append(actions, iptables.ReturnAction{})
+		mark = r.IpfwMarkAccept
+		actions = append(actions, ipfw.ReturnAction{})
 	case "next-tier", "pass":
 		// pass (called next-tier in the API for historical reasons) needs to set the pass
 		// mark, and then return to the calling chain for further processing.
-		mark = r.IptablesMarkPass
-		actions = append(actions, iptables.ReturnAction{})
+		mark = r.IpfwMarkPass
+		actions = append(actions, ipfw.ReturnAction{})
 	case "deny":
 		// Deny maps to DROP/REJECT.
-		actions = append(actions, r.IptablesFilterDenyAction())
+		actions = append(actions, r.IpfwFilterDenyAction())
 	case "log":
 		// This rule should log.
-		actions = append(actions, iptables.LogAction{
-			Prefix: r.IptablesLogPrefix,
+		actions = append(actions, ipfw.LogAction{
+			Prefix: r.IpfwLogPrefix,
 		})
 	default:
 		log.WithField("action", pRule.Action).Panic("Unknown rule action")
@@ -546,7 +545,7 @@ func (r *DefaultRuleRenderer) CalculateActions(pRule *proto.Rule, ipVersion uint
 	return
 }
 
-func appendProtocolMatch(match iptables.MatchCriteria, protocol *proto.Protocol, logCxt *log.Entry) iptables.MatchCriteria {
+func appendProtocolMatch(match ipfw.MatchCriteria, protocol *proto.Protocol, logCxt *log.Entry) ipfw.MatchCriteria {
 	if protocol == nil {
 		return match
 	}
@@ -563,8 +562,8 @@ func appendProtocolMatch(match iptables.MatchCriteria, protocol *proto.Protocol,
 	return match
 }
 
-func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion uint8) iptables.MatchCriteria {
-	match := iptables.Match()
+func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion uint8) ipfw.MatchCriteria {
+	match := ipfw.Match()
 
 	logCxt := log.WithFields(log.Fields{
 		"ipVersion": ipVersion,
@@ -582,21 +581,21 @@ func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion ui
 			"CalculateRuleMatch() passed more than one CIDR in SrcNet.")
 	}
 
-	nameForIPSet := func(ipsetID string) string {
+	nameForIpfwTable := func(ipfwTableID string) string {
 		if ipVersion == 4 {
-			return r.IPSetConfigV4.NameForMainIPSet(ipsetID)
+			return r.IpfwTableConfigV4.NameForMainIpfwTable(ipfwTableID)
 		} else {
-			return r.IPSetConfigV6.NameForMainIPSet(ipsetID)
+			return r.IpfwTableConfigV6.NameForMainIpfwTable(ipfwTableID)
 		}
 	}
 
-	for _, ipsetID := range pRule.SrcIpSetIds {
-		ipsetName := nameForIPSet(ipsetID)
+	for _, ipfwTableID := range pRule.SrcIpfwTableIds {
+		ipfwTableName := nameForIpfwTable(ipfwTableID)
 		logCxt.WithFields(log.Fields{
-			"ipsetID":   ipsetID,
-			"ipSetName": ipsetName,
+			"ipfwTableID":   ipfwTableID,
+			"ipSetName": ipfwTableName,
 		}).Debug("Adding src IP set match")
-		match = match.SourceIPSet(ipsetName)
+		match = match.SourceIpfwTable(ipfwTableName)
 	}
 
 	if len(pRule.SrcPorts) > 0 {
@@ -606,17 +605,17 @@ func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion ui
 		match = match.SourcePortRanges(pRule.SrcPorts)
 	}
 
-	if len(pRule.SrcNamedPortIpSetIds) > 1 {
+	if len(pRule.SrcNamedPortIpfwTableIds) > 1 {
 		log.WithField("rule", pRule).Panic(
 			"Bug: More than one source IP set ID left in rule.")
 	}
-	for _, np := range pRule.SrcNamedPortIpSetIds {
-		ipsetName := nameForIPSet(np)
+	for _, np := range pRule.SrcNamedPortIpfwTableIds {
+		ipfwTableName := nameForIpfwTable(np)
 		logCxt.WithFields(log.Fields{
 			"namedPort": np,
-			"ipsetName": ipsetName,
+			"ipfwTableName": ipfwTableName,
 		}).Debug("Adding source named port match")
-		match = match.SourceIPPortSet(ipsetName)
+		match = match.SourceIPPortSet(ipfwTableName)
 	}
 
 	if len(pRule.DstNet) == 1 {
@@ -627,21 +626,21 @@ func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion ui
 			"CalculateRuleMatch() passed more than one CIDR in DstNet.")
 	}
 
-	for _, ipsetID := range pRule.DstIpSetIds {
-		ipsetName := nameForIPSet(ipsetID)
-		match = match.DestIPSet(ipsetName)
+	for _, ipfwTableID := range pRule.DstIpfwTableIds {
+		ipfwTableName := nameForIpfwTable(ipfwTableID)
+		match = match.DestIpfwTable(ipfwTableName)
 		logCxt.WithFields(log.Fields{
-			"ipsetID":   ipsetID,
-			"ipSetName": ipsetName,
+			"ipfwTableID":   ipfwTableID,
+			"ipSetName": ipfwTableName,
 		}).Debug("Adding dst IP set match")
 	}
 
-	for _, ipsetID := range pRule.DstIpPortSetIds {
-		ipsetName := nameForIPSet(ipsetID)
-		match = match.DestIPPortSet(ipsetName)
+	for _, ipfwTableID := range pRule.DstIpPortSetIds {
+		ipfwTableName := nameForIpfwTable(ipfwTableID)
+		match = match.DestIPPortSet(ipfwTableName)
 		logCxt.WithFields(log.Fields{
-			"ipsetID":   ipsetID,
-			"ipSetName": ipsetName,
+			"ipfwTableID":   ipfwTableID,
+			"ipSetName": ipfwTableName,
 		}).Debug("Adding dst IP+port set match")
 	}
 
@@ -652,17 +651,17 @@ func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion ui
 		match = match.DestPortRanges(pRule.DstPorts)
 	}
 
-	if len(pRule.DstNamedPortIpSetIds) > 1 {
+	if len(pRule.DstNamedPortIpfwTableIds) > 1 {
 		log.WithField("rule", pRule).Panic(
 			"Bug: More than one source IP set ID left in rule.")
 	}
-	for _, np := range pRule.DstNamedPortIpSetIds {
-		ipsetName := nameForIPSet(np)
+	for _, np := range pRule.DstNamedPortIpfwTableIds {
+		ipfwTableName := nameForIpfwTable(np)
 		logCxt.WithFields(log.Fields{
 			"namedPort": np,
-			"ipsetName": ipsetName,
+			"ipfwTableName": ipfwTableName,
 		}).Debug("Adding dest named port match")
-		match = match.DestIPPortSet(ipsetName)
+		match = match.DestIPPortSet(ipfwTableName)
 	}
 
 	if ipVersion == 4 {
@@ -707,13 +706,13 @@ func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion ui
 		log.WithField("rule", pRule).Panic("CalculateRuleMatch() passed more than one CIDR in NotSrcNet.")
 	}
 
-	for _, ipsetID := range pRule.NotSrcIpSetIds {
-		ipsetName := nameForIPSet(ipsetID)
+	for _, ipfwTableID := range pRule.NotSrcIpfwTableIds {
+		ipfwTableName := nameForIpfwTable(ipfwTableID)
 		logCxt.WithFields(log.Fields{
-			"ipsetID":   ipsetID,
-			"ipSetName": ipsetName,
+			"ipfwTableID":   ipfwTableID,
+			"ipSetName": ipfwTableName,
 		}).Debug("Adding src IP set match")
-		match = match.NotSourceIPSet(ipsetName)
+		match = match.NotSourceIpfwTable(ipfwTableName)
 	}
 
 	if len(pRule.NotSrcPorts) > 0 {
@@ -725,13 +724,13 @@ func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion ui
 		}
 	}
 
-	for _, np := range pRule.NotSrcNamedPortIpSetIds {
-		ipsetName := nameForIPSet(np)
+	for _, np := range pRule.NotSrcNamedPortIpfwTableIds {
+		ipfwTableName := nameForIpfwTable(np)
 		logCxt.WithFields(log.Fields{
 			"namedPort": np,
-			"ipsetName": ipsetName,
+			"ipfwTableName": ipfwTableName,
 		}).Debug("Adding negated source named port match")
-		match = match.NotSourceIPPortSet(ipsetName)
+		match = match.NotSourceIPPortSet(ipfwTableName)
 	}
 
 	if len(pRule.NotDstNet) == 1 {
@@ -741,12 +740,12 @@ func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion ui
 		log.WithField("rule", pRule).Panic("CalculateRuleMatch() passed more than one CIDR in NotDstNet.")
 	}
 
-	for _, ipsetID := range pRule.NotDstIpSetIds {
-		ipsetName := nameForIPSet(ipsetID)
-		match = match.NotDestIPSet(ipsetName)
+	for _, ipfwTableID := range pRule.NotDstIpfwTableIds {
+		ipfwTableName := nameForIpfwTable(ipfwTableID)
+		match = match.NotDestIpfwTable(ipfwTableName)
 		logCxt.WithFields(log.Fields{
-			"ipsetID":   ipsetID,
-			"ipSetName": ipsetName,
+			"ipfwTableID":   ipfwTableID,
+			"ipSetName": ipfwTableName,
 		}).Debug("Adding dst IP set match")
 	}
 
@@ -759,13 +758,13 @@ func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion ui
 		}
 	}
 
-	for _, np := range pRule.NotDstNamedPortIpSetIds {
-		ipsetName := nameForIPSet(np)
+	for _, np := range pRule.NotDstNamedPortIpfwTableIds {
+		ipfwTableName := nameForIpfwTable(np)
 		logCxt.WithFields(log.Fields{
 			"namedPort": np,
-			"ipsetName": ipsetName,
+			"ipfwTableName": ipfwTableName,
 		}).Debug("Adding negated dest named port match")
-		match = match.NotDestIPPortSet(ipsetName)
+		match = match.NotDestIPPortSet(ipfwTableName)
 	}
 
 	if ipVersion == 4 {
@@ -796,7 +795,7 @@ func PolicyChainName(prefix PolicyChainNamePrefix, polID *proto.PolicyID) string
 	return hashutils.GetLengthLimitedID(
 		string(prefix),
 		polID.Name,
-		iptables.MaxChainNameLength,
+		ipfw.MaxChainNameLength,
 	)
 }
 
@@ -804,6 +803,6 @@ func ProfileChainName(prefix ProfileChainNamePrefix, profID *proto.ProfileID) st
 	return hashutils.GetLengthLimitedID(
 		string(prefix),
 		profID.Name,
-		iptables.MaxChainNameLength,
+		ipfw.MaxChainNameLength,
 	)
 }

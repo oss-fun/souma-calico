@@ -271,7 +271,7 @@ func (r *DefaultRuleRenderer) ipfwTableConfig(ipVersion uint8) *ipfwtable.IPVers
 }
 
 type Config struct {
-	TableConfigV4 *ipfwtable.IPVersionConfig
+	IpfwTableConfigV4 *ipfwtable.IPVersionConfig
 
 	WorkloadIfacePrefixes []string
 
