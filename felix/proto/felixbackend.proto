@@ -1,13 +1,13 @@
 syntax = "proto3";
 package felix;
-option go_package = "proto";
+option go_package = "./;proto";
 
 service PolicySync {
   // On this API, only the following payloads will be sent:
   //  - InSync
-  //  - IPSetUpdate
-  //  - IPSetDeltaUpdate
-  //  - IPSetRemove
+  //  - IpfwTableUpdate
+  //  - IpfwTableDeltaUpdate
+  //  - IpfwTableRemove
   //  - ActiveProfileUpdate
   //  - ActiveProfileRemove
   //  - ActivePolicyUpdate
@@ -44,14 +44,14 @@ message ToDataplane {
     // resynchronise the dataplane.
     InSync in_sync = 1;
 
-    // IPSetUpdate is sent when an IP set becomes active.  It contains the
+    // IpfwTableUpdate is sent when an IP set becomes active.  It contains the
     // complete membership of the IP set.
-    IPSetUpdate ipset_update = 2;
-    // IPSetDeltaUpdates are sent after the first IPSetUpdate; they contain
+    IpfwTableUpdate ipfwTable_update = 2;
+    // IpfwTableDeltaUpdates are sent after the first IpfwTableUpdate; they contain
     // a list of IPs that should be added and removed from the IP set.
-    IPSetDeltaUpdate ipset_delta_update = 3;
-    // IPSet remove is sent when an IP set is no longer needed.
-    IPSetRemove ipset_remove = 4;
+    IpfwTableDeltaUpdate ipfwTable_delta_update = 3;
+    // IpfwTable remove is sent when an IP set is no longer needed.
+    IpfwTableRemove ipfwTable_remove = 4;
 
     // ActiveProfileUpdate is sent when a profile becomes active or is updated.
     ActiveProfileUpdate active_profile_update = 5;
@@ -184,24 +184,24 @@ message RawConfig {
 message InSync {
 }
 
-message IPSetUpdate {
+message IpfwTableUpdate {
   string id = 1;
   repeated string members = 2;
-  enum IPSetType {
+  enum IpfwTableType {
     IP = 0;           // Each member is an IP address in dotted-decimal or IPv6 format.
     IP_AND_PORT = 1;  // Each member is "<IP>,(tcp|udp):port".
     NET = 2;          // Each member is a CIDR in dotted-decimal or IPv6 format.
   }
-  IPSetType type = 3;
+  IpfwTableType type = 3;
 }
 
-message IPSetDeltaUpdate {
+message IpfwTableDeltaUpdate {
   string id = 1;
   repeated string added_members = 2;
   repeated string removed_members = 3;
 }
 
-message IPSetRemove {
+message IpfwTableRemove {
   string id = 1;
 }
 
