@@ -142,11 +142,11 @@ func NewIPVersionConfig(
 	}
 }
 
-func (c IPVersionConfig) NameForTempTable(n uint) string {
+func (c IPVersionConfig) NameForTempIpfwTable(n uint) string {
 	return fmt.Sprint(c.tempTableNamePrefix, n)
 }
 
-func (c IPVersionConfig) NameForMainTable(id string) string {
+func (c IPVersionConfig) NameForMainIpfwTable(id string) string {
 	return combineAndTrunc(c.mainTableNamePrefix, id, MaxIpfwTableNameLength)
 }
 

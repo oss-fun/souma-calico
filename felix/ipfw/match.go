@@ -66,9 +66,24 @@ func (m MatchCriteria) DestNet(net string) MatchCriteria {
 	return append(m, fmt.Sprintf("to %s", net))
 }
 
-
 func (m MatchCriteria) NotDestNet(net string) MatchCriteria {
 	return append(m, fmt.Sprintf("to not %s", net))
+}
+
+func (m MatchCriteria) SourceTable(name string) MatchCriteria {
+	return append(m, fmt.Sprintf("ip from table(%s)", name))
+}
+
+func (m MatchCriteria) NotSourceTable(name string) MatchCriteria {
+	return append(m, fmt.Sprintf("ip from not table(%s)", name))
+}
+
+func (m MatchCriteria) DestTable(name string) MatchCriteria {
+	return append(m, fmt.Sprintf("to table(%s)", name))
+}
+
+func (m MatchCriteria) NotDestTable(name string) MatchCriteria {
+	return append(m, fmt.Sprintf("to not table(%s)", name))
 }
 
 func (m MatchCriteria) InInterface(iface string) MatchCriteria {

@@ -8,14 +8,30 @@ import (
 )
 
 type NatConfig struct {
+	detail  string
 	number  int
 	options []string
 }
 
-func NewNatCondig(number int) NatConfig {
+var ActiveNatConfigToNumber map[int]string
+var ActiveNumberToNatConfig map[string]int
+
+func NewNatConfig(number int) NatConfig {
 	return NatConfig {
+		detail: ActiveNatConfigToNumber[number],
 		number: number,
 	}
+}
+
+func GetNatRuleNumber(d string) int {
+	for i:=1; i<=65535; i++ {
+		if ActiveNatConfigToNumber[i] == "" {
+			ActiveNatConfigToNumber[i] = d
+			ActiveNumberToNatConfig[d] = i
+			return i
+		}
+	}
+	return -1
 }
 
 func (nc NatConfig) CmdString() string {
@@ -39,11 +55,6 @@ func (nc NatConfig) Log() NatConfig {
 
 func (nc NatConfig) Reset() NatConfig {
 	nc.options = append(nc.options, "reset")
-	return nc
-}
-
-func (nc NatConfig) log() NatConfig {
-	nc.options = append(nc.options, "log")
 	return nc
 }
 
