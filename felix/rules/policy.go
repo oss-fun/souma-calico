@@ -193,8 +193,8 @@ func (r *DefaultRuleRenderer) ProtoRuleToIpfwRules(pRule *proto.Rule, ipVersion 
 	//
 	// The matchBlockBuilder wraps up the above logic:
 	matchBlockBuilder := matchBlockBuilder{
-		markAllBlocksPass: r.IpfwTagScratch0,
-		markThisBlockPass: r.IpfwTagScratch1,
+		tagAllBlocksPass: r.IpfwTagScratch0,
+		tagThisBlockPass: r.IpfwTagScratch1,
 	}
 
 	// Port matches.  We only need to render blocks of ports if, in total, there's more than one
@@ -272,19 +272,19 @@ func (r *DefaultRuleRenderer) ProtoRuleToIpfwRules(pRule *proto.Rule, ipVersion 
 		// The CIDR or port matches in the rule overflowed and we rendered them
 		// as additional rules, which set the markAllBlocksPass bit on
 		// success.  Add a match on that bit to the calculated rule.
-		match = match.MarkSingleBitSet(matchBlockBuilder.markAllBlocksPass)
+		match = match.MarkSingleBitSet(tagBlockBuilder.tagAllBlocksPass)
 	}
-	markBit, actions := r.CalculateActions(ruleCopy, ipVersion)
+	tagNum, actions := r.CalculateActions(ruleCopy, ipVersion)
 	rs := matchBlockBuilder.Rules
-	if markBit != 0 {
+	if tagNum != 0 {
 		// The rule needs to do more than one action. Render a rule that
 		// executes the match criteria and sets the given mark bit if it
 		// matches, then render the actions as separate rules below.
 		rs = append(rs, ipfw.Rule{
 			Match:  match,
-			Action: ipfw.TagAction{Tag: markBit},
+			Action: ipfw.TagAction{TagNumber: tagNum},
 		})
-		match = ipfw.Match().MarkSingleBitSet(markBit)
+		match = ipfw.Match().MarkSingleBitSet(tagNum)
 	}
 	for _, action := range actions {
 		rs = append(rs, ipfw.Rule{
@@ -307,8 +307,8 @@ type matchBlockBuilder struct {
 	UsingMatchBlocks            bool
 	doneFirstPositiveMatchBlock bool
 
-	markAllBlocksPass uint16
-	markThisBlockPass uint16
+	tagAllBlocksPass uint16
+	tagThisBlockPass uint16
 
 	Rules []ipfw.Rule
 }
@@ -323,7 +323,7 @@ func (r *matchBlockBuilder) AppendPortMatchBlock(
 	// Write out the initial "reset" rule if this is the first block.
 	r.maybeAppendInitialRule(0)
 	// Figure out which bit to set.  See comment in positiveBlockMarkToSet() for details.
-	markToSet := r.positiveBlockMarkToSet()
+	tagTo := r.positiveBlockTagToSet()
 
 	logCxt := log.WithFields(log.Fields{
 		"protocol":     protocol,
@@ -336,7 +336,7 @@ func (r *matchBlockBuilder) AppendPortMatchBlock(
 		m = srcOrDst.AppendMatchPorts(m, split)
 		r.Rules = append(r.Rules, ipfw.Rule{
 			Match:  m,
-			Action: ipfw.TagAction{Tag: markToSet},
+			Action: ipfw.TagAction{TagNumber: tagTo},
 		})
 	}
 
@@ -344,7 +344,7 @@ func (r *matchBlockBuilder) AppendPortMatchBlock(
 		ipfwTableName := ipSetConfig.NameForMainIpfwTable(namedPortIpfwTableID)
 		r.Rules = append(r.Rules, ipfw.Rule{
 			Match:  srcOrDst.MatchIPPortIpfwTable(ipfwTableName),
-			Action: ipfw.TagAction{Tag: markToSet},
+			Action: ipfw.TagAction{TagNumber: tagTo},
 		})
 	}
 
@@ -356,13 +356,13 @@ func (r *matchBlockBuilder) AppendCIDRMatchBlock(cidrs []string, srcOrDst srcOrD
 	// Write out the initial "reset" rule if this is the first block.
 	r.maybeAppendInitialRule(0)
 	// Figure out which bit to set.  See comment in positiveBlockMarkToSet() for details.
-	markToSet := r.positiveBlockMarkToSet()
+	tagTo := r.positiveBlockTagToSet()
 
 	// Render the per-CIDR rules.
 	for _, cidr := range cidrs {
 		r.Rules = append(r.Rules, ipfw.Rule{
 			Match:  srcOrDst.MatchNet(cidr),
-			Action: ipfw.TagAction{Tag: markToSet},
+			Action: ipfw.TagAction{TagNumber: tagTo},
 		})
 	}
 
@@ -373,7 +373,7 @@ func (r *matchBlockBuilder) AppendCIDRMatchBlock(cidrs []string, srcOrDst srcOrD
 func (r *matchBlockBuilder) AppendNegatedCIDRMatchBlock(cidrs []string, srcOrDst srcOrDst) {
 	// Write out the initial "reset" rule if this is the first block.  Since this is a negated
 	// rule, we want the AllBlocks bit to be set by default .
-	r.maybeAppendInitialRule(r.markAllBlocksPass)
+	r.maybeAppendInitialRule(r.tagAllBlocksPass)
 	// To implement a negated match we emit a rule per CIDR that does a positive
 	// match on the CIDR and *clears* the AllBlocksPass bit if the packet matches.
 	// This gives the desired "not any" behaviour.
@@ -381,7 +381,7 @@ func (r *matchBlockBuilder) AppendNegatedCIDRMatchBlock(cidrs []string, srcOrDst
 		r.Rules = append(r.Rules,
 			ipfw.Rule{
 				Match:  srcOrDst.MatchNet(cidr),
-				Action: ipfw.ClearMarkAction{Mark: r.markAllBlocksPass},
+				Action: ipfw.UnTagAction{TagNumber: r.tagAllBlocksPass},
 			},
 		)
 	}
@@ -402,7 +402,7 @@ func (r *matchBlockBuilder) maybeAppendInitialRule(markBitsToSetInitially uint32
 	r.UsingMatchBlocks = true
 }
 
-func (r *matchBlockBuilder) positiveBlockMarkToSet() uint32 {
+func (r *matchBlockBuilder) positiveBlockTagToSet() uint16 {
 	// Implementing a positive match requires us to implement a logical
 	// "or" operation within the block and then "and" that with the result from
 	// the previous block.
@@ -417,12 +417,12 @@ func (r *matchBlockBuilder) positiveBlockMarkToSet() uint32 {
 	if !r.doneFirstPositiveMatchBlock {
 		// Optimization: since we're the first block, directly use the
 		// "AllBlocks" bit to store our result.
-		return r.markAllBlocksPass
+		return r.tagAllBlocksPass
 	}
 
 	// This isn't the first block, we need to use a scratch bit to
 	// store the result.
-	return r.markThisBlockPass
+	return r.tagThisBlockPass
 }
 
 func (r *matchBlockBuilder) finishPositiveBlock() {
@@ -517,28 +517,26 @@ func SplitPortList(ports []*proto.PortRange) (splits [][]*proto.PortRange) {
 	return
 }
 
-func (r *DefaultRuleRenderer) CalculateActions(pRule *proto.Rule, ipVersion uint8) (mark uint32, actions []ipfw.Action) {
+func (r *DefaultRuleRenderer) CalculateActions(pRule *proto.Rule, ipVersion uint8) (mark uint16, actions []ipfw.Action) {
 	actions = []ipfw.Action{}
 
 	switch pRule.Action {
 	case "", "allow":
 		// Allow needs to set the accept mark, and then return to the calling chain for
 		// further processing.
-		mark = r.IpfwMarkAccept
+		mark = r.IpfwTagAccept
 		actions = append(actions, ipfw.ReturnAction{})
 	case "next-tier", "pass":
 		// pass (called next-tier in the API for historical reasons) needs to set the pass
 		// mark, and then return to the calling chain for further processing.
-		mark = r.IpfwMarkPass
+		mark = r.IpfwTagPass
 		actions = append(actions, ipfw.ReturnAction{})
 	case "deny":
 		// Deny maps to DROP/REJECT.
 		actions = append(actions, r.IpfwFilterDenyAction())
 	case "log":
 		// This rule should log.
-		actions = append(actions, ipfw.LogAction{
-			Prefix: r.IpfwLogPrefix,
-		})
+		actions = append(actions, ipfw.LogAction{})
 	default:
 		log.WithField("action", pRule.Action).Panic("Unknown rule action")
 	}

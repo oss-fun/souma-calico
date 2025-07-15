@@ -101,3 +101,10 @@ func (a UntagAction) String() string {
 	return fmt.Sprintf("count untag %d", a.TagNumber)
 }
 
+type LogAction struct {
+	TypeLog struct{}
+}
+
+func (a LogAction) String() string {
+	return fmt.Sprintf("count log")
+}
