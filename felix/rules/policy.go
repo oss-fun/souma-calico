@@ -282,7 +282,7 @@ func (r *DefaultRuleRenderer) ProtoRuleToIpfwRules(pRule *proto.Rule, ipVersion 
 		// matches, then render the actions as separate rules below.
 		rs = append(rs, ipfw.Rule{
 			Match:  match,
-			Action: ipfw.SetMarkAction{Mark: markBit},
+			Action: ipfw.TagAction{Tag: markBit},
 		})
 		match = ipfw.Match().MarkSingleBitSet(markBit)
 	}
@@ -307,8 +307,8 @@ type matchBlockBuilder struct {
 	UsingMatchBlocks            bool
 	doneFirstPositiveMatchBlock bool
 
-	markAllBlocksPass uint32
-	markThisBlockPass uint32
+	markAllBlocksPass uint16
+	markThisBlockPass uint16
 
 	Rules []ipfw.Rule
 }
@@ -336,7 +336,7 @@ func (r *matchBlockBuilder) AppendPortMatchBlock(
 		m = srcOrDst.AppendMatchPorts(m, split)
 		r.Rules = append(r.Rules, ipfw.Rule{
 			Match:  m,
-			Action: ipfw.SetMarkAction{Mark: markToSet},
+			Action: ipfw.TagAction{Tag: markToSet},
 		})
 	}
 
@@ -344,7 +344,7 @@ func (r *matchBlockBuilder) AppendPortMatchBlock(
 		ipfwTableName := ipSetConfig.NameForMainIpfwTable(namedPortIpfwTableID)
 		r.Rules = append(r.Rules, ipfw.Rule{
 			Match:  srcOrDst.MatchIPPortIpfwTable(ipfwTableName),
-			Action: ipfw.SetMarkAction{Mark: markToSet},
+			Action: ipfw.TagAction{Tag: markToSet},
 		})
 	}
 
@@ -362,7 +362,7 @@ func (r *matchBlockBuilder) AppendCIDRMatchBlock(cidrs []string, srcOrDst srcOrD
 	for _, cidr := range cidrs {
 		r.Rules = append(r.Rules, ipfw.Rule{
 			Match:  srcOrDst.MatchNet(cidr),
-			Action: ipfw.SetMarkAction{Mark: markToSet},
+			Action: ipfw.TagAction{Tag: markToSet},
 		})
 	}
 

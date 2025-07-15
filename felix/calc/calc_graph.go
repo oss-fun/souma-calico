@@ -39,11 +39,11 @@ func init() {
 	prometheus.MustRegister(gaugeNumActiveSelectors)
 }
 
-type ipSetUpdateCallbacks interface {
-	OnIPSetAdded(setID string, ipSetType proto.IPSetUpdate_IPSetType)
-	OnIPSetMemberAdded(setID string, ip labelindex.IPSetMember)
-	OnIPSetMemberRemoved(setID string, ip labelindex.IPSetMember)
-	OnIPSetRemoved(setID string)
+type ipfwTableUpdateCallbacks interface {
+	OnIpfwTableAdded(setID string, ipfwTableType proto.IpfwTableUpdate_IpfwTableType)
+	OnIpfwTableMemberAdded(setID string, ip labelindex.IpfwTableMember)
+	OnIpfwTableMemberRemoved(setID string, ip labelindex.IpfwTableMember)
+	OnIpfwTableRemoved(setID string)
 }
 
 type rulesUpdateCallbacks interface {
@@ -99,7 +99,7 @@ type vxlanCallbacks interface {
 }
 
 type PipelineCallbacks interface {
-	ipSetUpdateCallbacks
+	ipfwTableUpdateCallbacks
 	rulesUpdateCallbacks
 	encapCallbacks
 	endpointCallbacks
@@ -122,7 +122,7 @@ type CalcGraph struct {
 	activeRulesCalculator   *ActiveRulesCalculator
 	ruleScanner             *RuleScanner
 	serviceIndex            *serviceindex.ServiceIndex
-	ipsetMemberIndex        *labelindex.SelectorAndNamedPortIndex
+	ipfwtableMemberIndex        *labelindex.SelectorAndNamedPortIndex
 	hostIPPassthru          *DataplanePassthru
 	l3RouteResolver         *L3RouteResolver
 	vxlanResolver           *VXLANResolver
@@ -241,23 +241,23 @@ func NewCalculationGraph(callbacks PipelineCallbacks, conf *config.Config, liveC
 	serviceIndex := serviceindex.NewServiceIndex()
 	serviceIndex.RegisterWith(allUpdDispatcher)
 	// Send the Service IP set member index's outputs to the dataplane.
-	serviceIndex.OnMemberAdded = func(ipSetID string, member labelindex.IPSetMember) {
+	serviceIndex.OnMemberAdded = func(ipfwTableID string, member labelindex.IpfwTableMember) {
 		if log.GetLevel() >= log.DebugLevel {
 			log.WithFields(log.Fields{
-				"ipSetID": ipSetID,
+				"ipfwTableID": ipfwTableID,
 				"member":  member,
 			}).Debug("Member added to service IP set.")
 		}
-		callbacks.OnIPSetMemberAdded(ipSetID, member)
+		callbacks.OnIpfwTableMemberAdded(ipfwTableID, member)
 	}
-	serviceIndex.OnMemberRemoved = func(ipSetID string, member labelindex.IPSetMember) {
+	serviceIndex.OnMemberRemoved = func(ipfwTableID string, member labelindex.IpfwTableMember) {
 		if log.GetLevel() >= log.DebugLevel {
 			log.WithFields(log.Fields{
-				"ipSetID": ipSetID,
+				"ipfwTableID": ipfwTableID,
 				"member":  member,
 			}).Debug("Member removed from service IP set.")
 		}
-		callbacks.OnIPSetMemberRemoved(ipSetID, member)
+		callbacks.OnIpfwTableMemberRemoved(ipfwTableID, member)
 	}
 	serviceIndex.OnAlive = liveCallback
 	cg.serviceIndex = serviceIndex
@@ -287,50 +287,50 @@ func NewCalculationGraph(callbacks PipelineCallbacks, conf *config.Config, liveC
 	//                   |
 	//               <dataplane>
 	//
-	ipsetMemberIndex := labelindex.NewSelectorAndNamedPortIndex()
-	ipsetMemberIndex.OnAlive = liveCallback
+	ipfwtableMemberIndex := labelindex.NewSelectorAndNamedPortIndex()
+	ipfwtableMemberIndex.OnAlive = liveCallback
 	// Wire up the inputs to the IP set member index.
-	ipsetMemberIndex.RegisterWith(allUpdDispatcher)
-	ruleScanner.OnIPSetActive = func(ipSet *IPSetData) {
-		log.WithField("ipSet", ipSet).Info("IPSet now active")
-		callbacks.OnIPSetAdded(ipSet.UniqueID(), ipSet.DataplaneProtocolType())
-		if ipSet.Service != "" {
-			serviceIndex.UpdateIPSet(ipSet.UniqueID(), ipSet.Service)
+	ipfwtableMemberIndex.RegisterWith(allUpdDispatcher)
+	ruleScanner.OnIpfwTableActive = func(ipfwTable *IpfwTableData) {
+		log.WithField("ipfwTable", ipfwTable).Info("IpfwTable now active")
+		callbacks.OnIpfwTableAdded(ipfwTable.UniqueID(), ipfwTable.DataplaneProtocolType())
+		if ipfwTable.Service != "" {
+			serviceIndex.UpdateIpfwTable(ipfwTable.UniqueID(), ipfwTable.Service)
 		} else {
-			ipsetMemberIndex.UpdateIPSet(ipSet.UniqueID(), ipSet.Selector, ipSet.NamedPortProtocol, ipSet.NamedPort)
+			ipfwtableMemberIndex.UpdateIpfwTable(ipfwTable.UniqueID(), ipfwTable.Selector, ipfwTable.NamedPortProtocol, ipfwTable.NamedPort)
 		}
 		gaugeNumActiveSelectors.Inc()
 	}
-	ruleScanner.OnIPSetInactive = func(ipSet *IPSetData) {
-		log.WithField("ipSet", ipSet).Info("IPSet now inactive")
-		if ipSet.Service != "" {
-			serviceIndex.DeleteIPSet(ipSet.UniqueID())
+	ruleScanner.OnIpfwTableInactive = func(ipfwTable *IpfwTableData) {
+		log.WithField("ipfwTable", ipfwTable).Info("IpfwTable now inactive")
+		if ipfwTable.Service != "" {
+			serviceIndex.DeleteIpfwTable(ipfwTable.UniqueID())
 		} else {
-			ipsetMemberIndex.DeleteIPSet(ipSet.UniqueID())
+			ipfwtableMemberIndex.DeleteIpfwTable(ipfwTable.UniqueID())
 		}
-		callbacks.OnIPSetRemoved(ipSet.UniqueID())
+		callbacks.OnIpfwTableRemoved(ipfwTable.UniqueID())
 		gaugeNumActiveSelectors.Dec()
 	}
 	// Send the IP set member index's outputs to the dataplane.
-	ipsetMemberIndex.OnMemberAdded = func(ipSetID string, member labelindex.IPSetMember) {
+	ipfwtableMemberIndex.OnMemberAdded = func(ipfwTableID string, member labelindex.IpfwTableMember) {
 		if log.GetLevel() >= log.DebugLevel {
 			log.WithFields(log.Fields{
-				"ipSetID": ipSetID,
+				"ipfwTableID": ipfwTableID,
 				"member":  member,
 			}).Debug("Member added to IP set.")
 		}
-		callbacks.OnIPSetMemberAdded(ipSetID, member)
+		callbacks.OnIpfwTableMemberAdded(ipfwTableID, member)
 	}
-	ipsetMemberIndex.OnMemberRemoved = func(ipSetID string, member labelindex.IPSetMember) {
+	ipfwtableMemberIndex.OnMemberRemoved = func(ipfwTableID string, member labelindex.IpfwTableMember) {
 		if log.GetLevel() >= log.DebugLevel {
 			log.WithFields(log.Fields{
-				"ipSetID": ipSetID,
+				"ipfwTableID": ipfwTableID,
 				"member":  member,
 			}).Debug("Member removed from IP set.")
 		}
-		callbacks.OnIPSetMemberRemoved(ipSetID, member)
+		callbacks.OnIpfwTableMemberRemoved(ipfwTableID, member)
 	}
-	cg.ipsetMemberIndex = ipsetMemberIndex
+	cg.ipfwtableMemberIndex = ipfwtableMemberIndex
 
 	// The endpoint policy resolver marries up the active policies with local endpoints and
 	// calculates the complete, ordered set of policies that apply to each endpoint.

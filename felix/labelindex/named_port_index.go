@@ -79,23 +79,23 @@ type endpointData struct {
 	ports   []model.EndpointPort
 	parents []*npParentData
 
-	cachedMatchingIPSetIDs set.Set[string] /* or, as an optimization, nil if there are none */
+	cachedMatchingIpfwTableIDs set.Set[string] /* or, as an optimization, nil if there are none */
 }
 
-func (d *endpointData) AddMatchingIPSetID(id string) {
-	if d.cachedMatchingIPSetIDs == nil {
-		d.cachedMatchingIPSetIDs = set.New[string]()
+func (d *endpointData) AddMatchingIpfwTableID(id string) {
+	if d.cachedMatchingIpfwTableIDs == nil {
+		d.cachedMatchingIpfwTableIDs = set.New[string]()
 	}
-	d.cachedMatchingIPSetIDs.Add(id)
+	d.cachedMatchingIpfwTableIDs.Add(id)
 }
 
-func (d *endpointData) RemoveMatchingIPSetID(id string) {
-	if d.cachedMatchingIPSetIDs == nil {
+func (d *endpointData) RemoveMatchingIpfwTableID(id string) {
+	if d.cachedMatchingIpfwTableIDs == nil {
 		return
 	}
-	d.cachedMatchingIPSetIDs.Discard(id)
-	if d.cachedMatchingIPSetIDs.Len() == 0 {
-		d.cachedMatchingIPSetIDs = nil
+	d.cachedMatchingIpfwTableIDs.Discard(id)
+	if d.cachedMatchingIpfwTableIDs.Len() == 0 {
+		d.cachedMatchingIpfwTableIDs = nil
 	}
 }
 
@@ -108,7 +108,7 @@ func (d *endpointData) HasParent(parent *npParentData) bool {
 	return false
 }
 
-func (d *endpointData) LookupNamedPorts(name string, proto IPSetPortProtocol) []uint16 {
+func (d *endpointData) LookupNamedPorts(name string, proto IpfwTablePortProtocol) []uint16 {
 	var matchingPorts []uint16
 	for _, p := range d.ports {
 		if p.Name == name && proto.MatchesModelProtocol(p.Protocol) {
@@ -118,9 +118,9 @@ func (d *endpointData) LookupNamedPorts(name string, proto IPSetPortProtocol) []
 	return matchingPorts
 }
 
-type IPSetPortProtocol uint8
+type IpfwTablePortProtocol uint8
 
-func (p IPSetPortProtocol) MatchesModelProtocol(protocol numorstring.Protocol) bool {
+func (p IpfwTablePortProtocol) MatchesModelProtocol(protocol numorstring.Protocol) bool {
 	if protocol.Type == numorstring.NumOrStringNum {
 		if protocol.NumVal == 0 {
 			// Special case: named ports default to TCP if protocol isn't specified.
@@ -140,7 +140,7 @@ func (p IPSetPortProtocol) MatchesModelProtocol(protocol numorstring.Protocol) b
 	return false
 }
 
-func (p IPSetPortProtocol) String() string {
+func (p IpfwTablePortProtocol) String() string {
 	switch p {
 	case ProtocolTCP:
 		return "tcp"
@@ -156,29 +156,29 @@ func (p IPSetPortProtocol) String() string {
 }
 
 const (
-	ProtocolNone IPSetPortProtocol = 0
-	ProtocolTCP  IPSetPortProtocol = 6
-	ProtocolUDP  IPSetPortProtocol = 17
-	ProtocolSCTP IPSetPortProtocol = 132
+	ProtocolNone IpfwTablePortProtocol = 0
+	ProtocolTCP  IpfwTablePortProtocol = 6
+	ProtocolUDP  IpfwTablePortProtocol = 17
+	ProtocolSCTP IpfwTablePortProtocol = 132
 )
 
-type IPSetMember struct {
+type IpfwTableMember struct {
 	CIDR       ip.CIDR
-	Protocol   IPSetPortProtocol
+	Protocol   IpfwTablePortProtocol
 	PortNumber uint16
 }
 
-type ipSetData struct {
+type ipfwTableData struct {
 	// The selector and named port that this IP set represents.  If the selector is nil then
 	// this IP set represents an unfiltered named port.  If namedPortProtocol == ProtocolNone then
 	// this IP set represents a selector only, with no named port component.
 	selector          selector.Selector
-	namedPortProtocol IPSetPortProtocol
+	namedPortProtocol IpfwTablePortProtocol
 	namedPort         string
 
 	// memberToRefCount stores a reference count for each member in the IP set.  Reference counts
 	// may be >1 if an IP address is shared by more than one endpoint.
-	memberToRefCount map[IPSetMember]uint64
+	memberToRefCount map[IpfwTableMember]uint64
 }
 
 // Get implements the Labels interface for endpointData.  Combines the endpoint's own labels with
@@ -297,13 +297,13 @@ func (d *npParentData) IterEndpointIDs(f func(id any) error) {
 	d.endpointIDs.Iter(f)
 }
 
-type NamedPortMatchCallback func(ipSetID string, member IPSetMember)
+type NamedPortMatchCallback func(ipfwTableID string, member IpfwTableMember)
 
 type SelectorAndNamedPortIndex struct {
 	endpointKVIdx *labelnamevalueindex.LabelNameValueIndex[any /*endpoint IDs*/, *endpointData]
 
 	parentKVIdx           *labelnamevalueindex.LabelNameValueIndex[string, *npParentData]
-	ipSetDataByID         map[string]*ipSetData
+	ipfwTableDataByID         map[string]*ipfwTableData
 	selectorCandidatesIdx *labelrestrictionindex.LabelRestrictionIndex[string]
 
 	// Callback functions
@@ -318,7 +318,7 @@ func NewSelectorAndNamedPortIndex() *SelectorAndNamedPortIndex {
 	inheritIdx := SelectorAndNamedPortIndex{
 		endpointKVIdx: labelnamevalueindex.New[any, *endpointData]("endpoints"),
 		parentKVIdx:   labelnamevalueindex.New[string, *npParentData]("parents"),
-		ipSetDataByID: map[string]*ipSetData{},
+		ipfwTableDataByID: map[string]*ipfwTableData{},
 		selectorCandidatesIdx: labelrestrictionindex.New[string](
 			labelrestrictionindex.WithGauges[string](
 				gaugeSelectorsOpt,
@@ -326,8 +326,8 @@ func NewSelectorAndNamedPortIndex() *SelectorAndNamedPortIndex {
 			)),
 
 		// Callback functions
-		OnMemberAdded:   func(ipSetID string, member IPSetMember) {},
-		OnMemberRemoved: func(ipSetID string, member IPSetMember) {},
+		OnMemberAdded:   func(ipfwTableID string, member IpfwTableMember) {},
+		OnMemberRemoved: func(ipfwTableID string, member IpfwTableMember) {},
 		OnAlive:         func() {},
 	}
 	return &inheritIdx
@@ -447,7 +447,7 @@ func extractCIDRsFromNetworkSet(netSet *model.NetworkSet) []ip.CIDR {
 		if cidr.Prefix() == 0 {
 			// Special case: the linux dataplane can't handle 0-length CIDRs, so we split it into
 			// multiple CIDRs.  Note: if the /1s were also in the network set, the deduplication is
-			// handled by reference counting in the ipSetData struct.
+			// handled by reference counting in the ipfwTableData struct.
 			log.Debug("Converting 0 length CIDR to pair of /1s")
 			switch cidr.Version() {
 			case 4:
@@ -473,11 +473,11 @@ func extractCIDRsFromNetworkSet(netSet *model.NetworkSet) []ip.CIDR {
 
 var defaultLogCtx = log.WithField("fieldsSuppressedAtThisLogLevel", "true")
 
-func (idx *SelectorAndNamedPortIndex) UpdateIPSet(ipSetID string, sel selector.Selector, namedPortProtocol IPSetPortProtocol, namedPort string) {
+func (idx *SelectorAndNamedPortIndex) UpdateIpfwTable(ipfwTableID string, sel selector.Selector, namedPortProtocol IpfwTablePortProtocol, namedPort string) {
 	logCxt := defaultLogCtx
 	if log.IsLevelEnabled(log.DebugLevel) {
 		logCxt = log.WithFields(log.Fields{
-			"ipSetID":           ipSetID,
+			"ipfwTableID":           ipfwTableID,
 			"selector":          sel,
 			"namedPort":         namedPort,
 			"namedPortProtocol": namedPortProtocol,
@@ -485,15 +485,15 @@ func (idx *SelectorAndNamedPortIndex) UpdateIPSet(ipSetID string, sel selector.S
 		logCxt.Debug("Updating IP set")
 	}
 	if sel == nil {
-		log.WithField("id", ipSetID).Panic("Selector should not be nil")
+		log.WithField("id", ipfwTableID).Panic("Selector should not be nil")
 	}
 
 	// Check whether anything has actually changed before we do a scan.
-	oldIPSetData := idx.ipSetDataByID[ipSetID]
-	if oldIPSetData != nil {
-		if oldIPSetData.selector.UniqueID() == sel.UniqueID() &&
-			oldIPSetData.namedPortProtocol == namedPortProtocol &&
-			oldIPSetData.namedPort == namedPort {
+	oldIpfwTableData := idx.ipfwTableDataByID[ipfwTableID]
+	if oldIpfwTableData != nil {
+		if oldIpfwTableData.selector.UniqueID() == sel.UniqueID() &&
+			oldIpfwTableData.namedPortProtocol == namedPortProtocol &&
+			oldIpfwTableData.namedPort == namedPort {
 			// Spurious refresh of existing IP set.
 			logCxt.Debug("Skipping unchanged IP set")
 			return
@@ -501,28 +501,28 @@ func (idx *SelectorAndNamedPortIndex) UpdateIPSet(ipSetID string, sel selector.S
 		// This case indicates a change to the selector or named port without a change to the ID,
 		// which isn't currently possible in Felix, since the ID is formed by hashing the other
 		// values.  For completeness, handle (inefficiently) by simulating a deletion.
-		log.WithField("ipSetID", ipSetID).Warn("IP set selector or named port changed for existing ID.")
-		for m := range oldIPSetData.memberToRefCount {
+		log.WithField("ipfwTableID", ipfwTableID).Warn("IP set selector or named port changed for existing ID.")
+		for m := range oldIpfwTableData.memberToRefCount {
 			// Emit deletion events for the members.  We don't need to do that
 			// for the expected, non-test code path because it's handled
 			// en-masse.
-			idx.OnMemberRemoved(ipSetID, m)
+			idx.OnMemberRemoved(ipfwTableID, m)
 		}
-		idx.DeleteIPSet(ipSetID)
+		idx.DeleteIpfwTable(ipfwTableID)
 	}
 
 	// If we get here, we have a new IP set, and we need to scan endpoints
 	// against its selector.
-	newIPSetData := &ipSetData{
+	newIpfwTableData := &ipfwTableData{
 		selector:          sel,
 		namedPort:         namedPort,
 		namedPortProtocol: namedPortProtocol,
-		memberToRefCount:  map[IPSetMember]uint64{},
+		memberToRefCount:  map[IpfwTableMember]uint64{},
 	}
-	idx.ipSetDataByID[ipSetID] = newIPSetData
-	idx.selectorCandidatesIdx.AddSelector(ipSetID, sel)
+	idx.ipfwTableDataByID[ipfwTableID] = newIpfwTableData
+	idx.selectorCandidatesIdx.AddSelector(ipfwTableID, sel)
 
-	idx.iterEndpointCandidates(ipSetID, func(epID any, epData *endpointData) {
+	idx.iterEndpointCandidates(ipfwTableID, func(epID any, epData *endpointData) {
 		idx.maybeReportLive()
 
 		if !sel.EvaluateLabels(epData) {
@@ -531,7 +531,7 @@ func (idx *SelectorAndNamedPortIndex) UpdateIPSet(ipSetID string, sel selector.S
 			return
 		}
 		counterSelectorEvalsTrue.Inc()
-		contrib := idx.CalculateEndpointContribution(epData, newIPSetData)
+		contrib := idx.CalculateEndpointContribution(epData, newIpfwTableData)
 		if len(contrib) == 0 {
 			return
 		}
@@ -539,30 +539,30 @@ func (idx *SelectorAndNamedPortIndex) UpdateIPSet(ipSetID string, sel selector.S
 			logCxt = logCxt.WithField("epID", epID)
 			logCxt.Debug("Endpoint contributes to IP set")
 		}
-		epData.AddMatchingIPSetID(ipSetID)
+		epData.AddMatchingIpfwTableID(ipfwTableID)
 		for _, member := range contrib {
-			refCount := newIPSetData.memberToRefCount[member]
+			refCount := newIpfwTableData.memberToRefCount[member]
 			if refCount == 0 {
 				if log.GetLevel() >= log.DebugLevel {
 					logCxt.WithField("member", member).Debug("New IP set member")
 				}
-				idx.OnMemberAdded(ipSetID, member)
+				idx.OnMemberAdded(ipfwTableID, member)
 			}
-			newIPSetData.memberToRefCount[member] = refCount + 1
+			newIpfwTableData.memberToRefCount[member] = refCount + 1
 		}
 	})
 }
 
-func (idx *SelectorAndNamedPortIndex) DeleteIPSet(setID string) {
-	ipSetData := idx.ipSetDataByID[setID]
+func (idx *SelectorAndNamedPortIndex) DeleteIpfwTable(setID string) {
+	ipfwTableData := idx.ipfwTableDataByID[setID]
 
-	if ipSetData == nil {
+	if ipfwTableData == nil {
 		log.WithField("id", setID).Warning("Delete of unknown IP set, ignoring")
 		return
 	} else {
 		log.WithFields(log.Fields{
-			"ipSetID":  setID,
-			"selector": ipSetData.selector.String(),
+			"ipfwTableID":  setID,
+			"selector": ipfwTableData.selector.String(),
 		}).Info("Deleting IP set")
 	}
 
@@ -571,10 +571,10 @@ func (idx *SelectorAndNamedPortIndex) DeleteIPSet(setID string) {
 		// to get through.  Note: we don't bother evaluating the selector
 		// here since it's faster to just do the cleanup unconditionally.
 		idx.maybeReportLive()
-		epData.RemoveMatchingIPSetID(setID)
+		epData.RemoveMatchingIpfwTableID(setID)
 	})
 
-	delete(idx.ipSetDataByID, setID)
+	delete(idx.ipfwTableDataByID, setID)
 	idx.selectorCandidatesIdx.DeleteSelector(setID)
 }
 
@@ -616,7 +616,7 @@ func (idx *SelectorAndNamedPortIndex) UpdateEndpointOrSet(
 
 	// Get the old endpoint data, so we can compare it.
 	oldEndpointData, _ := idx.endpointKVIdx.Get(id)
-	var oldIPSetContributions map[string][]IPSetMember
+	var oldIpfwTableContributions map[string][]IpfwTableMember
 	if oldEndpointData != nil {
 		// Before we do the (potentially expensive) selector scan, check if there can possibly be a
 		// change.
@@ -627,7 +627,7 @@ func (idx *SelectorAndNamedPortIndex) UpdateEndpointOrSet(
 
 		// If we get here, something about the endpoint has changed.  Calculate the old endpoint's
 		// contribution to the IP sets that it matched.
-		oldIPSetContributions = idx.RecalcCachedContributions(oldEndpointData)
+		oldIpfwTableContributions = idx.RecalcCachedContributions(oldEndpointData)
 		// Must remove from the index and then re-add in case the labels
 		// or parents have changed.
 		idx.endpointKVIdx.Remove(id)
@@ -635,7 +635,7 @@ func (idx *SelectorAndNamedPortIndex) UpdateEndpointOrSet(
 
 	// Calculate and compare the contribution of the new endpoint to IP sets.  Emit events for
 	// new contributions and then mop up deletions.
-	idx.scanEndpointAgainstIPSets(newEndpointData, oldIPSetContributions)
+	idx.scanEndpointAgainstIpfwTable(newEndpointData, oldIpfwTableContributions)
 
 	// Record the new endpoint data.
 	idx.endpointKVIdx.Add(id, newEndpointData)
@@ -658,27 +658,27 @@ func (idx *SelectorAndNamedPortIndex) UpdateEndpointOrSet(
 	gaugeNumEndpoints.Set(float64(idx.endpointKVIdx.Len()))
 }
 
-func (idx *SelectorAndNamedPortIndex) scanEndpointAgainstIPSets(
+func (idx *SelectorAndNamedPortIndex) scanEndpointAgainstIpfwTable(
 	epData *endpointData,
-	oldIPSetContributions map[string][]IPSetMember,
+	oldIpfwTableContributions map[string][]IpfwTableMember,
 ) {
 	// Remove any previous match from the endpoint's cache.  We'll re-add it
 	// below if the match is still correct.
-	epData.cachedMatchingIPSetIDs = nil
+	epData.cachedMatchingIpfwTableIDs = nil
 
 	// Iterate over potential new matches and incref any members that
 	// that produces.  (This may temporarily over count.)
-	idx.selectorCandidatesIdx.IterPotentialMatches(epData, func(ipSetID string, _ selector.Selector) {
+	idx.selectorCandidatesIdx.IterPotentialMatches(epData, func(ipfwTableID string, _ selector.Selector) {
 		// Make sure we don't appear non-live if there are a lot of IP sets to get through.
 		idx.maybeReportLive()
 
-		ipSetData := idx.ipSetDataByID[ipSetID]
-		matches := ipSetData.selector.EvaluateLabels(epData)
-		log.Debugf("Selector %s matches endpoint? %v", ipSetData.selector.String(), matches)
+		ipfwTableData := idx.ipfwTableDataByID[ipfwTableID]
+		matches := ipfwTableData.selector.EvaluateLabels(epData)
+		log.Debugf("Selector %s matches endpoint? %v", ipfwTableData.selector.String(), matches)
 		if matches {
 			// Record the match in the index.  This allows us to quickly recalculate the
 			// contribution of this endpoint later.
-			epData.AddMatchingIPSetID(ipSetID)
+			epData.AddMatchingIpfwTableID(ipfwTableID)
 
 			// Incref all the new members.  If any of them go from 0 to 1 reference then we
 			// know that they're new.  We'll temporarily double-count members that were already
@@ -686,32 +686,32 @@ func (idx *SelectorAndNamedPortIndex) scanEndpointAgainstIPSets(
 			//
 			// This reference counting also allows us to tolerate duplicate members in the
 			// input data.
-			newIPSetContribution := idx.CalculateEndpointContribution(epData, ipSetData)
-			for _, newMember := range newIPSetContribution {
-				newRefCount := ipSetData.memberToRefCount[newMember] + 1
+			newIpfwTableContribution := idx.CalculateEndpointContribution(epData, ipfwTableData)
+			for _, newMember := range newIpfwTableContribution {
+				newRefCount := ipfwTableData.memberToRefCount[newMember] + 1
 				if newRefCount == 1 {
 					// New member in the IP set.
-					idx.OnMemberAdded(ipSetID, newMember)
+					idx.OnMemberAdded(ipfwTableID, newMember)
 				}
-				ipSetData.memberToRefCount[newMember] = newRefCount
+				ipfwTableData.memberToRefCount[newMember] = newRefCount
 			}
 		}
 	})
 
 	// Decref all the old matches, emitting events if we drop to zero.
-	for ipSetID, oldMembers := range oldIPSetContributions {
+	for ipfwTableID, oldMembers := range oldIpfwTableContributions {
 		// Decref all the old members.  If they hit 0 references, then the member has been
 		// removed so we emit an event.
-		ipSetData := idx.ipSetDataByID[ipSetID]
+		ipfwTableData := idx.ipfwTableDataByID[ipfwTableID]
 		for _, oldMember := range oldMembers {
-			newRefCount := ipSetData.memberToRefCount[oldMember] - 1
+			newRefCount := ipfwTableData.memberToRefCount[oldMember] - 1
 			if newRefCount == 0 {
 				// Member no longer in the IP set.  Emit event and clean up the old reference
 				// count.
-				idx.OnMemberRemoved(ipSetID, oldMember)
-				delete(ipSetData.memberToRefCount, oldMember)
+				idx.OnMemberRemoved(ipfwTableID, oldMember)
+				delete(ipfwTableData.memberToRefCount, oldMember)
 			} else {
-				ipSetData.memberToRefCount[oldMember] = newRefCount
+				ipfwTableData.memberToRefCount[oldMember] = newRefCount
 			}
 		}
 	}
@@ -724,22 +724,22 @@ func (idx *SelectorAndNamedPortIndex) DeleteEndpoint(id any) {
 		return
 	}
 
-	log.WithField("oldContrib", oldEndpointData.cachedMatchingIPSetIDs).Debug("Old matching IP sets")
-	oldIPSetContributions := idx.RecalcCachedContributions(oldEndpointData)
-	for ipSetID, contributions := range oldIPSetContributions {
+	log.WithField("oldContrib", oldEndpointData.cachedMatchingIpfwTableIDs).Debug("Old matching IP sets")
+	oldIpfwTableContributions := idx.RecalcCachedContributions(oldEndpointData)
+	for ipfwTableID, contributions := range oldIpfwTableContributions {
 		// Decref all the old members.  If they hit 0 references, then the member has been
 		// removed so we emit an event.
-		log.WithField("ipSetID", ipSetID).Debug("Removing endpoint from IP set")
-		ipSetData := idx.ipSetDataByID[ipSetID]
+		log.WithField("ipfwTableID", ipfwTableID).Debug("Removing endpoint from IP set")
+		ipfwTableData := idx.ipfwTableDataByID[ipfwTableID]
 		for _, oldMember := range contributions {
-			newRefCount := ipSetData.memberToRefCount[oldMember] - 1
+			newRefCount := ipfwTableData.memberToRefCount[oldMember] - 1
 			if newRefCount == 0 {
 				// Member no longer in the IP set.  Emit event and clean up the old reference
 				// count.
-				idx.OnMemberRemoved(ipSetID, oldMember)
-				delete(ipSetData.memberToRefCount, oldMember)
+				idx.OnMemberRemoved(ipfwTableID, oldMember)
+				delete(ipfwTableData.memberToRefCount, oldMember)
 			} else {
-				ipSetData.memberToRefCount[oldMember] = newRefCount
+				ipfwTableData.memberToRefCount[oldMember] = newRefCount
 			}
 		}
 	}
@@ -783,11 +783,11 @@ func (idx *SelectorAndNamedPortIndex) updateParent(parentData *npParentData, app
 		// is a no-op on the first loop but keeping it here, rather than at the bottom of the loop
 		// makes it harder to accidentally skip it with a well-intentioned "continue".)
 		revertUpdate()
-		oldIPSetContributions := idx.RecalcCachedContributions(epData)
+		oldIpfwTableContributions := idx.RecalcCachedContributions(epData)
 
 		// Apply the update to the parent while we calculate this endpoint's new contribution.
 		applyUpdate()
-		idx.scanEndpointAgainstIPSets(epData, oldIPSetContributions)
+		idx.scanEndpointAgainstIpfwTable(epData, oldIpfwTableContributions)
 
 		return nil
 	})
@@ -806,16 +806,16 @@ func (idx *SelectorAndNamedPortIndex) DeleteParentLabels(parentID string) {
 // CalculateEndpointContribution calculates the given endpoint's contribution to the given IP set.
 // If the IP set represents a named port then the returned members will have a named port component.
 // Returns nil if the endpoint doesn't contribute to the IP set.
-func (idx *SelectorAndNamedPortIndex) CalculateEndpointContribution(d *endpointData, ipSetData *ipSetData) (contrib []IPSetMember) {
-	if ipSetData.namedPortProtocol != ProtocolNone {
+func (idx *SelectorAndNamedPortIndex) CalculateEndpointContribution(d *endpointData, ipfwTableData *ipfwTableData) (contrib []IpfwTableMember) {
+	if ipfwTableData.namedPortProtocol != ProtocolNone {
 		// This IP set represents a named port match, calculate the cross product of
 		// matching named ports by IP address.
-		portNumbers := d.LookupNamedPorts(ipSetData.namedPort, ipSetData.namedPortProtocol)
+		portNumbers := d.LookupNamedPorts(ipfwTableData.namedPort, ipfwTableData.namedPortProtocol)
 		for _, namedPort := range portNumbers {
 			for _, addr := range d.nets {
-				contrib = append(contrib, IPSetMember{
+				contrib = append(contrib, IpfwTableMember{
 					CIDR:       addr,
-					Protocol:   ipSetData.namedPortProtocol,
+					Protocol:   ipfwTableData.namedPortProtocol,
 					PortNumber: namedPort,
 				})
 			}
@@ -823,7 +823,7 @@ func (idx *SelectorAndNamedPortIndex) CalculateEndpointContribution(d *endpointD
 	} else {
 		// Non-named port match, simply return the CIDRs.
 		for _, addr := range d.nets {
-			contrib = append(contrib, IPSetMember{
+			contrib = append(contrib, IpfwTableMember{
 				CIDR: addr,
 			})
 		}
@@ -833,17 +833,17 @@ func (idx *SelectorAndNamedPortIndex) CalculateEndpointContribution(d *endpointD
 
 // RecalcCachedContributions uses the cached set of matching IP set IDs in the endpoint
 // struct to quickly recalculate the endpoint's contribution to all IP sets.
-func (idx *SelectorAndNamedPortIndex) RecalcCachedContributions(epData *endpointData) map[string][]IPSetMember {
-	if epData.cachedMatchingIPSetIDs == nil {
+func (idx *SelectorAndNamedPortIndex) RecalcCachedContributions(epData *endpointData) map[string][]IpfwTableMember {
+	if epData.cachedMatchingIpfwTableIDs == nil {
 		return nil
 	}
-	contrib := map[string][]IPSetMember{}
-	epData.cachedMatchingIPSetIDs.Iter(func(ipSetID string) error {
-		ipSetData := idx.ipSetDataByID[ipSetID]
-		if ipSetData == nil {
-			log.WithField("ipSetID", ipSetID).Panic("Endpoint cachedMatchingIPSetIDs refers to nonexistent IP set.")
+	contrib := map[string][]IpfwTableMember{}
+	epData.cachedMatchingIpfwTableIDs.Iter(func(ipfwTableID string) error {
+		ipfwTableData := idx.ipfwTableDataByID[ipfwTableID]
+		if ipfwTableData == nil {
+			log.WithField("ipfwTableID", ipfwTableID).Panic("Endpoint cachedMatchingIpfwTableIDs refers to nonexistent IP set.")
 		}
-		contrib[ipSetID] = idx.CalculateEndpointContribution(epData, ipSetData)
+		contrib[ipfwTableID] = idx.CalculateEndpointContribution(epData, ipfwTableData)
 		return nil
 	})
 	return contrib
@@ -882,8 +882,8 @@ func (idx *SelectorAndNamedPortIndex) maybeReportLive() {
 // iterEndpointCandidates iterates over the subset of endpoints that the
 // index says _may_ match the given IP set's selector.  It may produce additional
 // non-matching endpoints (or all endpoints if no optimization is available).
-func (idx *SelectorAndNamedPortIndex) iterEndpointCandidates(ipsetID string, f func(epID any, epData *endpointData)) {
-	sel := idx.ipSetDataByID[ipsetID].selector
+func (idx *SelectorAndNamedPortIndex) iterEndpointCandidates(ipfwtableID string, f func(epID any, epData *endpointData)) {
+	sel := idx.ipfwTableDataByID[ipfwtableID].selector
 	restrictions := sel.LabelRestrictions()
 	log.Debugf("Selector %s restrictions: %v", sel.String(), restrictions)
 

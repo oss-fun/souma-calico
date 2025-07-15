@@ -71,28 +71,28 @@ func init() {
 // match endpoints against tags/selectors.  (That is done downstream in a labelindex.InheritIndex
 // created in NewCalculationGraph.)
 type RuleScanner struct {
-	// ipSetsByUID maps from the IP set's UID to the metadata for that IP set.
-	ipSetsByUID map[string]*IPSetData
+	// ipfwTableByUID maps from the IP set's UID to the metadata for that IP set.
+	ipfwTableByUID map[string]*IpfwTableData
 	// rulesIDToUIDs maps from policy/profile ID to the set of IP set UIDs that are
 	// referenced by that policy/profile.
 	rulesIDToUIDs multidict.Multidict[any, string]
 	// uidsToRulesIDs maps from IP set UID to the set of policy/profile IDs that use it.
 	uidsToRulesIDs multidict.Multidict[string, any]
 
-	OnIPSetActive   func(ipSet *IPSetData)
-	OnIPSetInactive func(ipSet *IPSetData)
+	OnIpfwTableActive   func(ipSet *IpfwTableData)
+	OnIpfwTableInactive func(ipSet *IpfwTableData)
 
 	RulesUpdateCallbacks rulesUpdateCallbacks
 }
 
-type IPSetData struct {
+type IpfwTableData struct {
 	// The selector and named port that this IP set represents.  To represent an unfiltered named
 	// port, set selector to AllSelector.  If NamedPortProtocol == ProtocolNone then
 	// this IP set represents a selector only, with no named port component.
 	Selector selector.Selector
 	// NamedPortProtocol identifies the protocol (TCP or UDP) for a named port IP set.  It is
 	// set to ProtocolNone for a selector-only IP set.
-	NamedPortProtocol labelindex.IPSetPortProtocol
+	NamedPortProtocol labelindex.IpfwTablePortProtocol
 	// NamedPort contains the name of the named port represented by this IP set or "" for a
 	// selector-only IP set
 	NamedPort string
@@ -106,7 +106,7 @@ type IPSetData struct {
 	cachedUID string
 }
 
-func (d *IPSetData) String() string {
+func (d *IpfwTableData) String() string {
 	var parts []string
 	if d.Selector != nil {
 		parts = append(parts, fmt.Sprintf("selector:%q", d.Selector.String()))
@@ -121,10 +121,10 @@ func (d *IPSetData) String() string {
 		parts = append(parts, "serviceIncludePorts=true")
 	}
 	parts = append(parts, fmt.Sprintf("uniqueID:%q", d.UniqueID()))
-	return "IPSetData{" + strings.Join(parts, ", ") + "}"
+	return "IpfwTableData{" + strings.Join(parts, ", ") + "}"
 }
 
-func (d *IPSetData) UniqueID() string {
+func (d *IpfwTableData) UniqueID() string {
 	if d.cachedUID == "" {
 		if d.Service != "" {
 			// Service based IP set.
@@ -150,22 +150,22 @@ func (d *IPSetData) UniqueID() string {
 }
 
 // DataplaneProtocolType returns the dataplane driver protocol type of this IP set.
-// One of the proto.IPSetUpdate_IPSetType constants.
-func (d *IPSetData) DataplaneProtocolType() proto.IPSetUpdate_IPSetType {
+// One of the proto.IpfwTableUpdate_IpfwTableType constants.
+func (d *IpfwTableData) DataplaneProtocolType() proto.IpfwTableUpdate_IpfwTableType {
 	if d.NamedPortProtocol != labelindex.ProtocolNone {
-		return proto.IPSetUpdate_IP_AND_PORT
+		return proto.IpfwTableUpdate_IP_AND_PORT
 	}
 	if d.Service != "" {
 		if d.ServiceIncludePorts {
-			return proto.IPSetUpdate_IP_AND_PORT
+			return proto.IpfwTableUpdate_IP_AND_PORT
 		}
 	}
-	return proto.IPSetUpdate_NET
+	return proto.IpfwTableUpdate_NET
 }
 
 func NewRuleScanner() *RuleScanner {
 	calc := &RuleScanner{
-		ipSetsByUID:    make(map[string]*IPSetData),
+		ipfwTableByUID:    make(map[string]*IpfwTableData),
 		rulesIDToUIDs:  multidict.New[any, string](),
 		uidsToRulesIDs: multidict.New[string, any](),
 	}
@@ -210,27 +210,27 @@ func (rs *RuleScanner) updateRules(
 	log.Debugf("Scanning rules (%v in, %v out) for key %v",
 		len(inbound), len(outbound), key)
 	// Extract all the new selectors/named ports.
-	currentUIDToIPSet := make(map[string]*IPSetData)
+	currentUIDToIpfwTable := make(map[string]*IpfwTableData)
 	parsedInbound := make([]*ParsedRule, len(inbound))
 	for ii, rule := range inbound {
-		parsed, allIPSets := ruleToParsedRule(&rule)
+		parsed, allIpfeTable := ruleToParsedRule(&rule)
 		parsedInbound[ii] = parsed
-		for _, ipSet := range allIPSets {
-			// Note: there may be more than one entry in allIPSets for the same UID, but that's only
+		for _, ipSet := range allIpfeTable {
+			// Note: there may be more than one entry in allIpfeTable for the same UID, but that's only
 			// the case if the two entries really represent the same IP set so it's OK to coalesce
 			// them here.
-			currentUIDToIPSet[ipSet.UniqueID()] = ipSet
+			currentUIDToIpfwTable[ipSet.UniqueID()] = ipSet
 		}
 	}
 	parsedOutbound := make([]*ParsedRule, len(outbound))
 	for ii, rule := range outbound {
-		parsed, allIPSets := ruleToParsedRule(&rule)
+		parsed, allIpfeTable := ruleToParsedRule(&rule)
 		parsedOutbound[ii] = parsed
-		for _, ipSet := range allIPSets {
-			// Note: there may be more than one entry in allIPSets for the same UID, but that's only
+		for _, ipSet := range allIpfeTable {
+			// Note: there may be more than one entry in allIpfeTable for the same UID, but that's only
 			// the case if the two entries really represent the same IP set so it's OK to coalesce
 			// them here.
-			currentUIDToIPSet[ipSet.UniqueID()] = ipSet
+			currentUIDToIpfwTable[ipSet.UniqueID()] = ipSet
 		}
 	}
 	parsedRules = &ParsedRules{
@@ -244,7 +244,7 @@ func (rs *RuleScanner) updateRules(
 
 	// Figure out which IP sets are new.
 	addedUids := set.New[string]()
-	for uid := range currentUIDToIPSet {
+	for uid := range currentUIDToIpfwTable {
 		log.Debugf("Checking if UID %v is new.", uid)
 		if !rs.rulesIDToUIDs.Contains(key, uid) {
 			log.Debugf("UID %v is new", uid)
@@ -255,7 +255,7 @@ func (rs *RuleScanner) updateRules(
 	// Figure out which IP sets are no-longer in use.
 	removedUids := set.New[string]()
 	rs.rulesIDToUIDs.Iter(key, func(uid string) {
-		if _, ok := currentUIDToIPSet[uid]; !ok {
+		if _, ok := currentUIDToIpfwTable[uid]; !ok {
 			log.Debugf("Removed UID: %v", uid)
 			removedUids.Add(uid)
 		}
@@ -265,11 +265,11 @@ func (rs *RuleScanner) updateRules(
 	addedUids.Iter(func(uid string) error {
 		rs.rulesIDToUIDs.Put(key, uid)
 		if !rs.uidsToRulesIDs.ContainsKey(uid) {
-			ipSet := currentUIDToIPSet[uid]
-			rs.ipSetsByUID[uid] = ipSet
+			ipSet := currentUIDToIpfwTable[uid]
+			rs.ipfwTableByUID[uid] = ipSet
 			log.Debugf("IP set became active: %v -> %v", uid, ipSet)
 			// This IP set just became active, send event.
-			rs.OnIPSetActive(ipSet)
+			rs.OnIpfwTableActive(ipSet)
 		}
 		rs.uidsToRulesIDs.Put(uid, key)
 		return nil
@@ -280,11 +280,11 @@ func (rs *RuleScanner) updateRules(
 		rs.rulesIDToUIDs.Discard(key, uid)
 		rs.uidsToRulesIDs.Discard(uid, key)
 		if !rs.uidsToRulesIDs.ContainsKey(uid) {
-			ipSetData := rs.ipSetsByUID[uid]
-			delete(rs.ipSetsByUID, uid)
+			ipSetData := rs.ipfwTableByUID[uid]
+			delete(rs.ipfwTableByUID, uid)
 			// This IP set just became inactive, send event.
 			log.Debugf("IP set became inactive: %v -> %v", uid, ipSetData)
-			rs.OnIPSetInactive(ipSetData)
+			rs.OnIpfwTableInactive(ipSetData)
 		}
 		return nil
 	})
@@ -294,7 +294,7 @@ func (rs *RuleScanner) updateRules(
 // ParsedRules holds our intermediate representation of either a policy's rules or a profile's
 // rules.  As part of its processing, the RuleScanner converts backend rules into ParsedRules.
 // Where backend rules contain selectors and named ports, ParsedRules only contain
-// IPSet IDs.  The RuleScanner calculates the relevant IDs as it processes the rules and diverts
+// IpfwTable IDs.  The RuleScanner calculates the relevant IDs as it processes the rules and diverts
 // the details of the active selectors and named ports to the named port index, which
 // figures out the members that should be in those IP sets.
 type ParsedRules struct {
@@ -315,7 +315,7 @@ type ParsedRules struct {
 }
 
 // ParsedRule is like a backend.model.Rule, except the selector matches and named ports are
-// replaced with pre-calculated ipset IDs.
+// replaced with pre-calculated ipfwtable IDs.
 type ParsedRule struct {
 	Action string
 
@@ -325,27 +325,27 @@ type ParsedRule struct {
 
 	SrcNets              []*net.IPNet
 	SrcPorts             []numorstring.Port
-	SrcNamedPortIPSetIDs []string
+	SrcNamedPortIpfwTableIDs []string
 	DstNets              []*net.IPNet
 	DstPorts             []numorstring.Port
-	DstNamedPortIPSetIDs []string
+	DstNamedPortIpfwTableIDs []string
 	ICMPType             *int
 	ICMPCode             *int
-	SrcIPSetIDs          []string
-	DstIPSetIDs          []string
+	SrcIpfwTableIDs          []string
+	DstIpfwTableIDs          []string
 	DstIPPortSetIDs      []string
 
 	NotProtocol             *numorstring.Protocol
 	NotSrcNets              []*net.IPNet
 	NotSrcPorts             []numorstring.Port
-	NotSrcNamedPortIPSetIDs []string
+	NotSrcNamedPortIpfwTableIDs []string
 	NotDstNets              []*net.IPNet
 	NotDstPorts             []numorstring.Port
-	NotDstNamedPortIPSetIDs []string
+	NotDstNamedPortIpfwTableIDs []string
 	NotICMPType             *int
 	NotICMPCode             *int
-	NotSrcIPSetIDs          []string
-	NotDstIPSetIDs          []string
+	NotSrcIpfwTableIDs          []string
+	NotDstIpfwTableIDs          []string
 
 	// These fields allow us to pass through the raw match criteria from the V3 datamodel,
 	// unmodified. The selectors above are formed in the update processor layer by combining the
@@ -372,7 +372,7 @@ type ParsedRule struct {
 	Metadata *model.RuleMetadata
 }
 
-func ruleToParsedRule(rule *model.Rule) (parsedRule *ParsedRule, allIPSets []*IPSetData) {
+func ruleToParsedRule(rule *model.Rule) (parsedRule *ParsedRule, allIpfeTable []*IpfwTableData) {
 	srcSel, dstSel, notSrcSels, notDstSels := extractSelectors(rule)
 
 	// In the datamodel, named ports are included in the list of ports as an "or" match; i.e. the
@@ -411,37 +411,37 @@ func ruleToParsedRule(rule *model.Rule) (parsedRule *ParsedRule, allIPSets []*IP
 	//     not (<match-1> or <match-2>)
 	//
 	// we'd need the union of <match-1> and <match-2> rather than the intersection.
-	srcNamedPortIPSets := namedPortsToIPSets(srcNamedPorts, srcSel, namedPortProto)
-	dstNamedPortIPSets := namedPortsToIPSets(dstNamedPorts, dstSel, namedPortProto)
-	notSrcNamedPortIPSets := namedPortsToIPSets(notSrcNamedPorts, srcSel, namedPortProto)
-	notDstNamedPortIPSets := namedPortsToIPSets(notDstNamedPorts, dstSel, namedPortProto)
+	srcNamedPortIpfeTable := namedPortsToIpfeTable(srcNamedPorts, srcSel, namedPortProto)
+	dstNamedPortIpfeTable := namedPortsToIpfeTable(dstNamedPorts, dstSel, namedPortProto)
+	notSrcNamedPortIpfeTable := namedPortsToIpfeTable(notSrcNamedPorts, srcSel, namedPortProto)
+	notDstNamedPortIpfeTable := namedPortsToIpfeTable(notDstNamedPorts, dstSel, namedPortProto)
 
 	// Optimization: only include the selectors if we haven't already covered them with a named
 	// port match above.  If we have some named ports then we've already filtered the named port
 	// by the selector above.  If we have numeric ports, we can't make the optimization
 	// because we can't filter numeric ports by selector in the same way.
-	var srcSelIPSets, dstSelIPSets []*IPSetData
+	var srcSelIpfeTable, dstSelIpfeTable []*IpfwTableData
 	if len(srcNumericPorts) > 0 || len(srcNamedPorts) == 0 {
-		srcSelIPSets = selectorsToIPSets(srcSel)
+		srcSelIpfeTable = selectorsToIpfeTable(srcSel)
 	}
 	if len(dstNumericPorts) > 0 || len(dstNamedPorts) == 0 {
-		dstSelIPSets = selectorsToIPSets(dstSel)
+		dstSelIpfeTable = selectorsToIpfeTable(dstSel)
 	}
 
-	// Include any Service IPSet as well.
-	var dstIPPortSets []*IPSetData
+	// Include any Service IpfwTable as well.
+	var dstIPPortSets []*IpfwTableData
 	if rule.DstService != "" {
 		svc := fmt.Sprintf("%s/%s", rule.DstServiceNamespace, rule.DstService)
-		dstIPPortSets = append(dstIPPortSets, &IPSetData{Service: svc, ServiceIncludePorts: true})
+		dstIPPortSets = append(dstIPPortSets, &IpfwTableData{Service: svc, ServiceIncludePorts: true})
 	}
 
 	if rule.SrcService != "" {
 		svc := fmt.Sprintf("%s/%s", rule.SrcServiceNamespace, rule.SrcService)
-		srcSelIPSets = append(srcSelIPSets, &IPSetData{Service: svc, ServiceIncludePorts: false})
+		srcSelIpfeTable = append(srcSelIpfeTable, &IpfwTableData{Service: svc, ServiceIncludePorts: false})
 	}
 
-	notSrcSelIPSets := selectorsToIPSets(notSrcSels)
-	notDstSelIPSets := selectorsToIPSets(notDstSels)
+	notSrcSelIpfeTable := selectorsToIpfeTable(notSrcSels)
+	notDstSelIpfeTable := selectorsToIpfeTable(notDstSels)
 
 	parsedRule = &ParsedRule{
 		Action: rule.Action,
@@ -452,14 +452,14 @@ func ruleToParsedRule(rule *model.Rule) (parsedRule *ParsedRule, allIPSets []*IP
 
 		SrcNets:              rule.AllSrcNets(),
 		SrcPorts:             srcNumericPorts,
-		SrcNamedPortIPSetIDs: ipSetsToUIDs(srcNamedPortIPSets),
-		SrcIPSetIDs:          ipSetsToUIDs(srcSelIPSets),
+		SrcNamedPortIpfwTableIDs: ipfwTableToUIDs(srcNamedPortIpfeTable),
+		SrcIpfwTableIDs:          ipfwTableToUIDs(srcSelIpfeTable),
 
 		DstNets:              rule.AllDstNets(),
 		DstPorts:             dstNumericPorts,
-		DstNamedPortIPSetIDs: ipSetsToUIDs(dstNamedPortIPSets),
-		DstIPSetIDs:          ipSetsToUIDs(dstSelIPSets),
-		DstIPPortSetIDs:      ipSetsToUIDs(dstIPPortSets),
+		DstNamedPortIpfwTableIDs: ipfwTableToUIDs(dstNamedPortIpfeTable),
+		DstIpfwTableIDs:          ipfwTableToUIDs(dstSelIpfeTable),
+		DstIPPortSetIDs:      ipfwTableToUIDs(dstIPPortSets),
 
 		ICMPType: rule.ICMPType,
 		ICMPCode: rule.ICMPCode,
@@ -468,13 +468,13 @@ func ruleToParsedRule(rule *model.Rule) (parsedRule *ParsedRule, allIPSets []*IP
 
 		NotSrcNets:              rule.AllNotSrcNets(),
 		NotSrcPorts:             notSrcNumericPorts,
-		NotSrcNamedPortIPSetIDs: ipSetsToUIDs(notSrcNamedPortIPSets),
-		NotSrcIPSetIDs:          ipSetsToUIDs(notSrcSelIPSets),
+		NotSrcNamedPortIpfwTableIDs: ipfwTableToUIDs(notSrcNamedPortIpfeTable),
+		NotSrcIpfwTableIDs:          ipfwTableToUIDs(notSrcSelIpfeTable),
 
 		NotDstNets:              rule.AllNotDstNets(),
 		NotDstPorts:             notDstNumericPorts,
-		NotDstNamedPortIPSetIDs: ipSetsToUIDs(notDstNamedPortIPSets),
-		NotDstIPSetIDs:          ipSetsToUIDs(notDstSelIPSets),
+		NotDstNamedPortIpfwTableIDs: ipfwTableToUIDs(notDstNamedPortIpfeTable),
+		NotDstIpfwTableIDs:          ipfwTableToUIDs(notDstSelIpfeTable),
 
 		NotICMPType: rule.NotICMPType,
 		NotICMPCode: rule.NotICMPCode,
@@ -500,53 +500,53 @@ func ruleToParsedRule(rule *model.Rule) (parsedRule *ParsedRule, allIPSets []*IP
 		Metadata: rule.Metadata,
 	}
 
-	allIPSets = append(allIPSets, srcNamedPortIPSets...)
-	allIPSets = append(allIPSets, dstNamedPortIPSets...)
-	allIPSets = append(allIPSets, notSrcNamedPortIPSets...)
-	allIPSets = append(allIPSets, notDstNamedPortIPSets...)
-	allIPSets = append(allIPSets, srcSelIPSets...)
-	allIPSets = append(allIPSets, dstSelIPSets...)
-	allIPSets = append(allIPSets, dstIPPortSets...)
-	allIPSets = append(allIPSets, notSrcSelIPSets...)
-	allIPSets = append(allIPSets, notDstSelIPSets...)
+	allIpfeTable = append(allIpfeTable, srcNamedPortIpfeTable...)
+	allIpfeTable = append(allIpfeTable, dstNamedPortIpfeTable...)
+	allIpfeTable = append(allIpfeTable, notSrcNamedPortIpfeTable...)
+	allIpfeTable = append(allIpfeTable, notDstNamedPortIpfeTable...)
+	allIpfeTable = append(allIpfeTable, srcSelIpfeTable...)
+	allIpfeTable = append(allIpfeTable, dstSelIpfeTable...)
+	allIpfeTable = append(allIpfeTable, dstIPPortSets...)
+	allIpfeTable = append(allIpfeTable, notSrcSelIpfeTable...)
+	allIpfeTable = append(allIpfeTable, notDstSelIpfeTable...)
 
 	return
 }
 
-func namedPortsToIPSets(namedPorts []string, positiveSelectors []selector.Selector, proto labelindex.IPSetPortProtocol) []*IPSetData {
-	var ipSets []*IPSetData
+func namedPortsToIpfeTable(namedPorts []string, positiveSelectors []selector.Selector, proto labelindex.IpfwTablePortProtocol) []*IpfwTableData {
+	var ipfwTable []*IpfwTableData
 	if len(positiveSelectors) > 1 {
 		log.WithField("selectors", positiveSelectors).Panic(
-			"More than one positive selector passed to namedPortsToIPSets")
+			"More than one positive selector passed to namedPortsToIpfeTable")
 	}
 	sel := AllSelector
 	if len(positiveSelectors) > 0 {
 		sel = positiveSelectors[0]
 	}
 	for _, namedPort := range namedPorts {
-		ipSet := IPSetData{
+		ipSet := IpfwTableData{
 			Selector:          sel,
 			NamedPort:         namedPort,
 			NamedPortProtocol: proto,
 		}
-		ipSets = append(ipSets, &ipSet)
+		ipfwTable = append(ipfwTable, &ipSet)
 	}
-	return ipSets
+	return ipfwTable
 }
 
-func selectorsToIPSets(selectors []selector.Selector) []*IPSetData {
-	var ipSets []*IPSetData
+func selectorsToIpfeTable(selectors []selector.Selector) []*IpfwTableData {
+	var ipfwTable []*IpfwTableData
 	for _, s := range selectors {
-		ipSets = append(ipSets, &IPSetData{
+		ipfwTable = append(ipfwTable, &IpfwTableData{
 			Selector: s,
 		})
 	}
-	return ipSets
+	return ipfwTable
 }
 
-func ipSetsToUIDs(ipSets []*IPSetData) []string {
+func ipfwTableToUIDs(ipfwTable []*IpfwTableData) []string {
 	var ids []string
-	for _, ipSet := range ipSets {
+	for _, ipSet := range ipfwTable {
 		ids = append(ids, ipSet.UniqueID())
 	}
 	return ids

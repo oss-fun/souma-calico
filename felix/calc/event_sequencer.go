@@ -47,10 +47,10 @@ type EventSequencer struct {
 
 	// Buffers used to hold data that we haven't flushed yet so we can coalesce multiple
 	// updates and generate updates in dependency order.
-	pendingAddedIPSets           map[string]proto.IPSetUpdate_IPSetType
-	pendingRemovedIPSets         set.Set[string]
-	pendingAddedIPSetMembers     multidict.Multidict[string, labelindex.IPSetMember]
-	pendingRemovedIPSetMembers   multidict.Multidict[string, labelindex.IPSetMember]
+	pendingAddedIpfwTable           map[string]proto.IpfwTableUpdate_IpfwTableType
+	pendingRemovedIpfwTable         set.Set[string]
+	pendingAddedIpfwTableMembers     multidict.Multidict[string, labelindex.IpfwTableMember]
+	pendingRemovedIpfwTableMembers   multidict.Multidict[string, labelindex.IpfwTableMember]
 	pendingPolicyUpdates         map[model.PolicyKey]*ParsedRules
 	pendingPolicyDeletes         set.Set[model.PolicyKey]
 	pendingProfileUpdates        map[model.ProfileRulesKey]*ParsedRules
@@ -85,7 +85,7 @@ type EventSequencer struct {
 	pendingServiceDeletes        set.Set[serviceID]
 
 	// Sets to record what we've sent downstream. Updated whenever we flush.
-	sentIPSets          set.Set[string]
+	sentIpfwTable          set.Set[string]
 	sentPolicies        set.Set[model.PolicyKey]
 	sentProfiles        set.Set[model.ProfileRulesKey]
 	sentEndpoints       set.Set[model.Key]
@@ -117,10 +117,10 @@ type serviceID struct {
 }
 
 // func (buf *EventSequencer) HasPendingUpdates() {
-//	return buf.pendingAddedIPSets.Len() > 0 ||
-//		buf.pendingRemovedIPSets.Len() > 0 ||
-//		buf.pendingAddedIPSetMembers.Len() > 0 ||
-//		buf.pendingRemovedIPSetMembers.Len() > 0 ||
+//	return buf.pendingAddedIpfwTable.Len() > 0 ||
+//		buf.pendingRemovedIpfwTable.Len() > 0 ||
+//		buf.pendingAddedIpfwTableMembers.Len() > 0 ||
+//		buf.pendingRemovedIpfwTableMembers.Len() > 0 ||
 //		len(buf.pendingPolicyUpdates) > 0 ||
 //		buf.pendingPolicyDeletes.Len() > 0 ||
 //
@@ -129,10 +129,10 @@ type serviceID struct {
 func NewEventSequencer(conf configInterface) *EventSequencer {
 	buf := &EventSequencer{
 		config:                     conf,
-		pendingAddedIPSets:         map[string]proto.IPSetUpdate_IPSetType{},
-		pendingRemovedIPSets:       set.New[string](),
-		pendingAddedIPSetMembers:   multidict.New[string, labelindex.IPSetMember](),
-		pendingRemovedIPSetMembers: multidict.New[string, labelindex.IPSetMember](),
+		pendingAddedIpfwTable:         map[string]proto.IpfwTableUpdate_IpfwTableType{},
+		pendingRemovedIpfwTable:       set.New[string](),
+		pendingAddedIpfwTableMembers:   multidict.New[string, labelindex.IpfwTableMember](),
+		pendingRemovedIpfwTableMembers: multidict.New[string, labelindex.IpfwTableMember](),
 
 		pendingPolicyUpdates:         map[model.PolicyKey]*ParsedRules{},
 		pendingPolicyDeletes:         set.New[model.PolicyKey](),
@@ -163,7 +163,7 @@ func NewEventSequencer(conf configInterface) *EventSequencer {
 		pendingServiceDeletes:        set.New[serviceID](),
 
 		// Sets to record what we've sent downstream. Updated whenever we flush.
-		sentIPSets:          set.New[string](),
+		sentIpfwTable:          set.New[string](),
 		sentPolicies:        set.New[model.PolicyKey](),
 		sentProfiles:        set.New[model.ProfileRulesKey](),
 		sentEndpoints:       set.New[model.Key](),
@@ -186,60 +186,60 @@ type routeID struct {
 	dst string
 }
 
-func (buf *EventSequencer) OnIPSetAdded(setID string, ipSetType proto.IPSetUpdate_IPSetType) {
+func (buf *EventSequencer) OnIpfwTableAdded(setID string, ipSetType proto.IpfwTableUpdate_IpfwTableType) {
 	log.Debugf("IP set %v now active", setID)
-	sent := buf.sentIPSets.Contains(setID)
-	removePending := buf.pendingRemovedIPSets.Contains(setID)
+	sent := buf.sentIpfwTable.Contains(setID)
+	removePending := buf.pendingRemovedIpfwTable.Contains(setID)
 	if sent && !removePending {
-		log.Panic("OnIPSetAdded called for existing IP set")
+		log.Panic("OnIpfwTableAdded called for existing IP set")
 	}
-	buf.pendingAddedIPSets[setID] = ipSetType
-	buf.pendingRemovedIPSets.Discard(setID)
+	buf.pendingAddedIpfwTable[setID] = ipSetType
+	buf.pendingRemovedIpfwTable.Discard(setID)
 	// An add implicitly means that the set is now empty.
-	buf.pendingAddedIPSetMembers.DiscardKey(setID)
-	buf.pendingRemovedIPSetMembers.DiscardKey(setID)
+	buf.pendingAddedIpfwTableMembers.DiscardKey(setID)
+	buf.pendingRemovedIpfwTableMembers.DiscardKey(setID)
 }
 
-func (buf *EventSequencer) OnIPSetRemoved(setID string) {
+func (buf *EventSequencer) OnIpfwTableRemoved(setID string) {
 	log.Debugf("IP set %v no longer active", setID)
-	sent := buf.sentIPSets.Contains(setID)
-	_, updatePending := buf.pendingAddedIPSets[setID]
+	sent := buf.sentIpfwTable.Contains(setID)
+	_, updatePending := buf.pendingAddedIpfwTable[setID]
 	if !sent && !updatePending {
-		log.WithField("setID", setID).Panic("IPSetRemoved called for unknown IP set")
+		log.WithField("setID", setID).Panic("IpfwTableRemoved called for unknown IP set")
 	}
 	if sent {
-		buf.pendingRemovedIPSets.Add(setID)
+		buf.pendingRemovedIpfwTable.Add(setID)
 	}
-	delete(buf.pendingAddedIPSets, setID)
-	buf.pendingAddedIPSetMembers.DiscardKey(setID)
-	buf.pendingRemovedIPSetMembers.DiscardKey(setID)
+	delete(buf.pendingAddedIpfwTable, setID)
+	buf.pendingAddedIpfwTableMembers.DiscardKey(setID)
+	buf.pendingRemovedIpfwTableMembers.DiscardKey(setID)
 }
 
-func (buf *EventSequencer) OnIPSetMemberAdded(setID string, member labelindex.IPSetMember) {
+func (buf *EventSequencer) OnIpfwTableMemberAdded(setID string, member labelindex.IpfwTableMember) {
 	log.Debugf("IP set %v now contains %v", setID, member)
-	sent := buf.sentIPSets.Contains(setID)
-	_, updatePending := buf.pendingAddedIPSets[setID]
+	sent := buf.sentIpfwTable.Contains(setID)
+	_, updatePending := buf.pendingAddedIpfwTable[setID]
 	if !sent && !updatePending {
 		log.WithField("setID", setID).Panic("Member added to unknown IP set")
 	}
-	if buf.pendingRemovedIPSetMembers.Contains(setID, member) {
-		buf.pendingRemovedIPSetMembers.Discard(setID, member)
+	if buf.pendingRemovedIpfwTableMembers.Contains(setID, member) {
+		buf.pendingRemovedIpfwTableMembers.Discard(setID, member)
 	} else {
-		buf.pendingAddedIPSetMembers.Put(setID, member)
+		buf.pendingAddedIpfwTableMembers.Put(setID, member)
 	}
 }
 
-func (buf *EventSequencer) OnIPSetMemberRemoved(setID string, member labelindex.IPSetMember) {
+func (buf *EventSequencer) OnIpfwTableMemberRemoved(setID string, member labelindex.IpfwTableMember) {
 	log.Debugf("IP set %v no longer contains %v", setID, member)
-	sent := buf.sentIPSets.Contains(setID)
-	_, updatePending := buf.pendingAddedIPSets[setID]
+	sent := buf.sentIpfwTable.Contains(setID)
+	_, updatePending := buf.pendingAddedIpfwTable[setID]
 	if !sent && !updatePending {
 		log.WithField("setID", setID).Panic("Member removed from unknown IP set")
 	}
-	if buf.pendingAddedIPSetMembers.Contains(setID, member) {
-		buf.pendingAddedIPSetMembers.Discard(setID, member)
+	if buf.pendingAddedIpfwTableMembers.Contains(setID, member) {
+		buf.pendingAddedIpfwTableMembers.Discard(setID, member)
 	} else {
-		buf.pendingRemovedIPSetMembers.Put(setID, member)
+		buf.pendingRemovedIpfwTableMembers.Put(setID, member)
 	}
 }
 
@@ -760,25 +760,25 @@ func (buf *EventSequencer) flushHostWireguardDeletes() {
 	log.Debug("Done flushing wireguard removes")
 }
 
-func (buf *EventSequencer) flushAddedIPSets() {
-	for setID, setType := range buf.pendingAddedIPSets {
+func (buf *EventSequencer) flushAddedIpfwTable() {
+	for setID, setType := range buf.pendingAddedIpfwTable {
 		log.WithField("setID", setID).Debug("Flushing added IP set")
 		members := make([]string, 0)
-		buf.pendingAddedIPSetMembers.Iter(setID, func(member labelindex.IPSetMember) {
+		buf.pendingAddedIpfwTableMembers.Iter(setID, func(member labelindex.IpfwTableMember) {
 			members = append(members, memberToProto(member))
 		})
-		buf.pendingAddedIPSetMembers.DiscardKey(setID)
-		buf.Callback(&proto.IPSetUpdate{
+		buf.pendingAddedIpfwTableMembers.DiscardKey(setID)
+		buf.Callback(&proto.IpfwTableUpdate{
 			Id:      setID,
 			Members: members,
 			Type:    setType,
 		})
-		buf.sentIPSets.Add(setID)
-		delete(buf.pendingAddedIPSets, setID)
+		buf.sentIpfwTable.Add(setID)
+		delete(buf.pendingAddedIpfwTable, setID)
 	}
 }
 
-func memberToProto(member labelindex.IPSetMember) string {
+func memberToProto(member labelindex.IpfwTableMember) string {
 	switch member.Protocol {
 	case labelindex.ProtocolNone:
 		return member.CIDR.String()
@@ -800,8 +800,8 @@ func (buf *EventSequencer) Flush() {
 
 	// Flush mainline additions/updates in dependency order (IP sets, policy, endpoints) so
 	// that later updates always have their dependencies in place.
-	buf.flushAddedIPSets()
-	buf.flushIPSetDeltas()
+	buf.flushAddedIpfwTable()
+	buf.flushIpfwTableDeltas()
 	buf.flushPolicyUpdates()
 	buf.flushProfileUpdates()
 	buf.flushEndpointTierUpdates()
@@ -810,7 +810,7 @@ func (buf *EventSequencer) Flush() {
 	buf.flushEndpointTierDeletes()
 	buf.flushProfileDeletes()
 	buf.flushPolicyDeletes()
-	buf.flushRemovedIPSets()
+	buf.flushRemovedIpfwTable()
 
 	// Flush ServiceAccount and Namespace updates. These have no particular ordering compared with other updates.
 	buf.flushServiceAccounts()
@@ -848,40 +848,40 @@ func (buf *EventSequencer) Flush() {
 	buf.flushServices()
 }
 
-func (buf *EventSequencer) flushRemovedIPSets() {
-	buf.pendingRemovedIPSets.Iter(func(setID string) (err error) {
+func (buf *EventSequencer) flushRemovedIpfwTable() {
+	buf.pendingRemovedIpfwTable.Iter(func(setID string) (err error) {
 		log.Debugf("Flushing IP set remove: %v", setID)
-		buf.Callback(&proto.IPSetRemove{
+		buf.Callback(&proto.IpfwTableRemove{
 			Id: setID,
 		})
-		buf.pendingRemovedIPSetMembers.DiscardKey(setID)
-		buf.pendingAddedIPSetMembers.DiscardKey(setID)
-		buf.pendingRemovedIPSets.Discard(setID)
-		buf.sentIPSets.Discard(setID)
+		buf.pendingRemovedIpfwTableMembers.DiscardKey(setID)
+		buf.pendingAddedIpfwTableMembers.DiscardKey(setID)
+		buf.pendingRemovedIpfwTable.Discard(setID)
+		buf.sentIpfwTable.Discard(setID)
 		return
 	})
 	log.Debugf("Done flushing IP set removes")
 }
 
-func (buf *EventSequencer) flushIPSetDeltas() {
-	buf.pendingRemovedIPSetMembers.IterKeys(buf.flushAddsOrRemoves)
-	buf.pendingAddedIPSetMembers.IterKeys(buf.flushAddsOrRemoves)
+func (buf *EventSequencer) flushIpfwTableDeltas() {
+	buf.pendingRemovedIpfwTableMembers.IterKeys(buf.flushAddsOrRemoves)
+	buf.pendingAddedIpfwTableMembers.IterKeys(buf.flushAddsOrRemoves)
 	log.Debugf("Done flushing IP address deltas")
 }
 
 func (buf *EventSequencer) flushAddsOrRemoves(setID string) {
 	log.Debugf("Flushing IP set deltas: %v", setID)
-	deltaUpdate := proto.IPSetDeltaUpdate{
+	deltaUpdate := proto.IpfwTableDeltaUpdate{
 		Id: setID,
 	}
-	buf.pendingAddedIPSetMembers.Iter(setID, func(member labelindex.IPSetMember) {
+	buf.pendingAddedIpfwTableMembers.Iter(setID, func(member labelindex.IpfwTableMember) {
 		deltaUpdate.AddedMembers = append(deltaUpdate.AddedMembers, memberToProto(member))
 	})
-	buf.pendingRemovedIPSetMembers.Iter(setID, func(member labelindex.IPSetMember) {
+	buf.pendingRemovedIpfwTableMembers.Iter(setID, func(member labelindex.IpfwTableMember) {
 		deltaUpdate.RemovedMembers = append(deltaUpdate.RemovedMembers, memberToProto(member))
 	})
-	buf.pendingAddedIPSetMembers.DiscardKey(setID)
-	buf.pendingRemovedIPSetMembers.DiscardKey(setID)
+	buf.pendingAddedIpfwTableMembers.DiscardKey(setID)
+	buf.pendingRemovedIpfwTableMembers.DiscardKey(setID)
 	buf.Callback(&deltaUpdate)
 }
 
