@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"strings"
+
+	"github.com/projectcalico/calico/felix/proto"
 )
 
 type MatchCriteria []string
@@ -110,3 +112,35 @@ func (m MatchCriteria) ConntrackState(state string) MatchCriteria {
 	return append(m, state)
 }
 
+func (m MatchCriteria) SourcePortRanges(ports []*proto.PortRange) MatchCriteria {
+	portsString := PortRangesToMultiport(ports)
+	return append(m, fmt.Sprintf("src-port %s", portsString))
+}
+
+func (m MatchCriteria) NotSourcePortRanges(ports []*proto.PortRange) MatchCriteria {
+	portsString := PortRangesToMultiport(ports)
+	return append(m, fmt.Sprintf("not src-port %s", portsString))
+}
+
+func (m MatchCriteria) DestPortRanges(ports []*proto.PortRange) MatchCriteria {
+	portsString := PortRangesToMultiport(ports)
+	return append(m, fmt.Sprintf("src-port %s", portsString))
+}
+
+func (m MatchCriteria) NotDestPortRanges(ports []*proto.PortRange) MatchCriteria {
+	portsString := PortRangesToMultiport(ports)
+	return append(m, fmt.Sprintf("src-port %s", portsString))
+}
+
+func PortRangesToMultiport(ports []*proto.PortRange) string {
+	portFragments := make([]string, len(ports))
+	for i, port := range ports {
+		if port.First == port.Last {
+			portFragments[i] = fmt.Sprintf("%d", port.First)
+		} else {
+			portFragments[i] = fmt.Sprintf("%d:%d", port.First, port.Last)
+		}
+	}
+	portsString := strings.Join(portFragments, ",")
+	return portsString
+}

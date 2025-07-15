@@ -323,27 +323,27 @@ type ParsedRule struct {
 
 	Protocol *numorstring.Protocol
 
-	SrcNets              []*net.IPNet
-	SrcPorts             []numorstring.Port
+	SrcNets                  []*net.IPNet
+	SrcPorts                 []numorstring.Port
 	SrcNamedPortIpfwTableIDs []string
-	DstNets              []*net.IPNet
-	DstPorts             []numorstring.Port
+	DstNets                  []*net.IPNet
+	DstPorts                 []numorstring.Port
 	DstNamedPortIpfwTableIDs []string
-	ICMPType             *int
-	ICMPCode             *int
+	ICMPType                 *int
+	ICMPCode                 *int
 	SrcIpfwTableIDs          []string
 	DstIpfwTableIDs          []string
-	DstIPPortSetIDs      []string
+	DstIPPortSetIDs          []string
 
-	NotProtocol             *numorstring.Protocol
-	NotSrcNets              []*net.IPNet
-	NotSrcPorts             []numorstring.Port
+	NotProtocol                 *numorstring.Protocol
+	NotSrcNets                  []*net.IPNet
+	NotSrcPorts                 []numorstring.Port
 	NotSrcNamedPortIpfwTableIDs []string
-	NotDstNets              []*net.IPNet
-	NotDstPorts             []numorstring.Port
+	NotDstNets                  []*net.IPNet
+	NotDstPorts                 []numorstring.Port
 	NotDstNamedPortIpfwTableIDs []string
-	NotICMPType             *int
-	NotICMPCode             *int
+	NotICMPType                 *int
+	NotICMPCode                 *int
 	NotSrcIpfwTableIDs          []string
 	NotDstIpfwTableIDs          []string
 

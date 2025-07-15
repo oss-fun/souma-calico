@@ -272,7 +272,7 @@ func (r *DefaultRuleRenderer) ProtoRuleToIpfwRules(pRule *proto.Rule, ipVersion 
 		// The CIDR or port matches in the rule overflowed and we rendered them
 		// as additional rules, which set the markAllBlocksPass bit on
 		// success.  Add a match on that bit to the calculated rule.
-		match = match.MarkSingleBitSet(tagBlockBuilder.tagAllBlocksPass)
+		match = match.Tagged(matchBlockBuilder.tagAllBlocksPass)
 	}
 	tagNum, actions := r.CalculateActions(ruleCopy, ipVersion)
 	rs := matchBlockBuilder.Rules
@@ -284,7 +284,7 @@ func (r *DefaultRuleRenderer) ProtoRuleToIpfwRules(pRule *proto.Rule, ipVersion 
 			Match:  match,
 			Action: ipfw.TagAction{TagNumber: tagNum},
 		})
-		match = ipfw.Match().MarkSingleBitSet(tagNum)
+		match = ipfw.Match().Tagged(tagNum)
 	}
 	for _, action := range actions {
 		rs = append(rs, ipfw.Rule{
@@ -380,22 +380,21 @@ func (r *matchBlockBuilder) AppendNegatedCIDRMatchBlock(cidrs []string, srcOrDst
 	for _, cidr := range cidrs {
 		r.Rules = append(r.Rules,
 			ipfw.Rule{
+				Action: ipfw.UntagAction{TagNumber: r.tagAllBlocksPass},
 				Match:  srcOrDst.MatchNet(cidr),
-				Action: ipfw.UnTagAction{TagNumber: r.tagAllBlocksPass},
 			},
 		)
 	}
 }
 
-func (r *matchBlockBuilder) maybeAppendInitialRule(markBitsToSetInitially uint32) {
+func (r *matchBlockBuilder) maybeAppendInitialRule(tagNumToSetInitially uint16) {
 	if r.UsingMatchBlocks {
 		return
 	}
 	r.Rules = append(r.Rules,
 		ipfw.Rule{
-			Action: ipfw.SetMaskedMarkAction{
-				Mark: markBitsToSetInitially,
-				Mask: r.markAllBlocksPass | r.markThisBlockPass,
+			Action: ipfw.TagAction{
+				TagNumber: tagNumToSetInitially,
 			},
 		},
 	)
@@ -438,8 +437,8 @@ func (r *matchBlockBuilder) finishPositiveBlock() {
 	//     <AllBlocks bit> &&= <ThisBlock bit>
 	//
 	r.Rules = append(r.Rules, ipfw.Rule{
-		Match:  ipfw.Match().MarkClear(r.markThisBlockPass),
-		Action: ipfw.ClearMarkAction{Mark: r.markAllBlocksPass},
+		Match:  ipfw.Match(),
+		Action: ipfw.UntagAction{TagNumber: r.tagAllBlocksPass},
 	})
 }
 
@@ -477,9 +476,9 @@ func (sod srcOrDst) AppendMatchPorts(m ipfw.MatchCriteria, pr []*proto.PortRange
 func (sod srcOrDst) MatchIPPortIpfwTable(setID string) ipfw.MatchCriteria {
 	switch sod {
 	case src:
-		return ipfw.Match().SourceIPPortSet(setID)
+		return ipfw.Match().SourceTable(setID)
 	case dst:
-		return ipfw.Match().DestIPPortSet(setID)
+		return ipfw.Match().DestTable(setID)
 	}
 	log.WithField("srcOrDst", sod).Panic("Unknown source or dest type.")
 	return nil
@@ -553,7 +552,7 @@ func appendProtocolMatch(match ipfw.MatchCriteria, protocol *proto.Protocol, log
 		match = match.Protocol(p.Name)
 	case *proto.Protocol_Number:
 		logCxt.WithField("protoNum", p.Number).Debug("Adding protocol match")
-		match = match.ProtocolNum(uint8(p.Number))
+		match = match.Protocol(uint8(p.Number))
 	default:
 		logCxt.WithField("protocol", protocol).Panic("Unknown protocol type")
 	}
@@ -580,11 +579,7 @@ func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion ui
 	}
 
 	nameForIpfwTable := func(ipfwTableID string) string {
-		if ipVersion == 4 {
-			return r.IpfwTableConfigV4.NameForMainIpfwTable(ipfwTableID)
-		} else {
-			return r.IpfwTableConfigV6.NameForMainIpfwTable(ipfwTableID)
-		}
+		return r.IpfwTableConfigV4.NameForMainIpfwTable(ipfwTableID)
 	}
 
 	for _, ipfwTableID := range pRule.SrcIpfwTableIds {
@@ -593,14 +588,7 @@ func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion ui
 			"ipfwTableID":   ipfwTableID,
 			"ipSetName": ipfwTableName,
 		}).Debug("Adding src IP set match")
-		match = match.SourceIpfwTable(ipfwTableName)
-	}
-
-	if len(pRule.SrcPorts) > 0 {
-		logCxt.WithFields(log.Fields{
-			"ports": pRule.SrcPorts,
-		}).Debug("Adding src port match")
-		match = match.SourcePortRanges(pRule.SrcPorts)
+		match = match.SourceTable(ipfwTableName)
 	}
 
 	if len(pRule.SrcNamedPortIpfwTableIds) > 1 {
@@ -613,7 +601,7 @@ func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion ui
 			"namedPort": np,
 			"ipfwTableName": ipfwTableName,
 		}).Debug("Adding source named port match")
-		match = match.SourceIPPortSet(ipfwTableName)
+		match = match.SourceTable(ipfwTableName)
 	}
 
 	if len(pRule.DstNet) == 1 {
@@ -626,7 +614,7 @@ func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion ui
 
 	for _, ipfwTableID := range pRule.DstIpfwTableIds {
 		ipfwTableName := nameForIpfwTable(ipfwTableID)
-		match = match.DestIpfwTable(ipfwTableName)
+		match = match.DestTable(ipfwTableName)
 		logCxt.WithFields(log.Fields{
 			"ipfwTableID":   ipfwTableID,
 			"ipSetName": ipfwTableName,
@@ -635,7 +623,7 @@ func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion ui
 
 	for _, ipfwTableID := range pRule.DstIpPortSetIds {
 		ipfwTableName := nameForIpfwTable(ipfwTableID)
-		match = match.DestIPPortSet(ipfwTableName)
+		match = match.DestTable(ipfwTableName)
 		logCxt.WithFields(log.Fields{
 			"ipfwTableID":   ipfwTableID,
 			"ipSetName": ipfwTableName,
@@ -659,29 +647,7 @@ func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion ui
 			"namedPort": np,
 			"ipfwTableName": ipfwTableName,
 		}).Debug("Adding dest named port match")
-		match = match.DestIPPortSet(ipfwTableName)
-	}
-
-	if ipVersion == 4 {
-		switch icmp := pRule.Icmp.(type) {
-		case *proto.Rule_IcmpTypeCode:
-			logCxt.WithField("icmpTypeCode", icmp).Debug("Adding ICMP type/code match.")
-			match = match.ICMPTypeAndCode(
-				uint8(icmp.IcmpTypeCode.Type), uint8(icmp.IcmpTypeCode.Code))
-		case *proto.Rule_IcmpType:
-			logCxt.WithField("icmpType", icmp).Debug("Adding ICMP type-only match.")
-			match = match.ICMPType(uint8(icmp.IcmpType))
-		}
-	} else {
-		switch icmp := pRule.Icmp.(type) {
-		case *proto.Rule_IcmpTypeCode:
-			logCxt.WithField("icmpTypeCode", icmp).Debug("Adding ICMPv6 type/code match.")
-			match = match.ICMPV6TypeAndCode(
-				uint8(icmp.IcmpTypeCode.Type), uint8(icmp.IcmpTypeCode.Code))
-		case *proto.Rule_IcmpType:
-			logCxt.WithField("icmpTypeCode", icmp).Debug("Adding ICMPv6 type-only match.")
-			match = match.ICMPV6Type(uint8(icmp.IcmpType))
-		}
+		match = match.DestTable(ipfwTableName)
 	}
 
 	// Now, the negated versions.
@@ -693,7 +659,7 @@ func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion ui
 			match = match.NotProtocol(p.Name)
 		case *proto.Protocol_Number:
 			logCxt.WithField("protoNum", p.Number).Debug("Adding protocol match")
-			match = match.NotProtocolNum(uint8(p.Number))
+			match = match.NotProtocol(uint8(p.Number))
 		}
 	}
 
@@ -710,16 +676,7 @@ func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion ui
 			"ipfwTableID":   ipfwTableID,
 			"ipSetName": ipfwTableName,
 		}).Debug("Adding src IP set match")
-		match = match.NotSourceIpfwTable(ipfwTableName)
-	}
-
-	if len(pRule.NotSrcPorts) > 0 {
-		logCxt.WithFields(log.Fields{
-			"ports": pRule.NotSrcPorts,
-		}).Debug("Adding src port match")
-		for _, portSplit := range SplitPortList(pRule.NotSrcPorts) {
-			match = match.NotSourcePortRanges(portSplit)
-		}
+		match = match.NotSourceTable(ipfwTableName)
 	}
 
 	for _, np := range pRule.NotSrcNamedPortIpfwTableIds {
@@ -728,7 +685,7 @@ func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion ui
 			"namedPort": np,
 			"ipfwTableName": ipfwTableName,
 		}).Debug("Adding negated source named port match")
-		match = match.NotSourceIPPortSet(ipfwTableName)
+		match = match.NotSourceTable(ipfwTableName)
 	}
 
 	if len(pRule.NotDstNet) == 1 {
@@ -740,7 +697,7 @@ func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion ui
 
 	for _, ipfwTableID := range pRule.NotDstIpfwTableIds {
 		ipfwTableName := nameForIpfwTable(ipfwTableID)
-		match = match.NotDestIpfwTable(ipfwTableName)
+		match = match.NotDestTable(ipfwTableName)
 		logCxt.WithFields(log.Fields{
 			"ipfwTableID":   ipfwTableID,
 			"ipSetName": ipfwTableName,
@@ -762,30 +719,9 @@ func (r *DefaultRuleRenderer) CalculateRuleMatch(pRule *proto.Rule, ipVersion ui
 			"namedPort": np,
 			"ipfwTableName": ipfwTableName,
 		}).Debug("Adding negated dest named port match")
-		match = match.NotDestIPPortSet(ipfwTableName)
+		match = match.NotDestTable(ipfwTableName)
 	}
 
-	if ipVersion == 4 {
-		switch icmp := pRule.NotIcmp.(type) {
-		case *proto.Rule_NotIcmpTypeCode:
-			logCxt.WithField("icmpTypeCode", icmp).Debug("Adding ICMP type/code match.")
-			match = match.NotICMPTypeAndCode(
-				uint8(icmp.NotIcmpTypeCode.Type), uint8(icmp.NotIcmpTypeCode.Code))
-		case *proto.Rule_NotIcmpType:
-			logCxt.WithField("icmpType", icmp).Debug("Adding ICMP type-only match.")
-			match = match.NotICMPType(uint8(icmp.NotIcmpType))
-		}
-	} else {
-		switch icmp := pRule.NotIcmp.(type) {
-		case *proto.Rule_NotIcmpTypeCode:
-			logCxt.WithField("icmpTypeCode", icmp).Debug("Adding ICMPv6 type/code match.")
-			match = match.NotICMPV6TypeAndCode(
-				uint8(icmp.NotIcmpTypeCode.Type), uint8(icmp.NotIcmpTypeCode.Code))
-		case *proto.Rule_NotIcmpType:
-			logCxt.WithField("icmpTypeCode", icmp).Debug("Adding ICMPv6 type-only match.")
-			match = match.NotICMPV6Type(uint8(icmp.NotIcmpType))
-		}
-	}
 	return match
 }
 

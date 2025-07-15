@@ -32,7 +32,7 @@ var AllIpfwTableTypes = []IpfwTableType{
 	IpfwTableTypePort,
 }
 
-func (t IpfwTableType) CanonicaliseMenber(member string) IpfwTableMember {
+func (t IpfwTableType) CanonicaliseMember(member string) IpfwTableMember {
 	switch t {
 	case IpfwTableTypeIP:
 		ipAddr := ip.FromIPOrCIDRString(member)

@@ -34,11 +34,9 @@ func newIpfwTable(update *proto.IpfwTableUpdate) *ipfwTableInfo {
 
 	switch update.GetType() {
 	case proto.IpfwTableUpdate_IP:
-		s.Type = ipfwtable.IpfwTableTypeHashIP
-	case proto.IpfwTableUpdate_IP_AND_PORT:
-		s.Type = ipfwtable.IpfwTableTypeHashIPPort
+		s.Type = ipfwtable.IpfwTableTypeIP
 	case proto.IpfwTableUpdate_NET:
-		s.Type = ipfwtable.IpfwTableTypeHashNet
+		s.Type = ipfwtable.IpfwTableTypeNet
 	default:
 		log.WithField("IpfwTableType", update.GetType()).Panic("unknown IpfwTableType")
 	}
@@ -78,11 +76,9 @@ func (s *ipfwTableInfo) getIpfwTableUpdate() *proto.IpfwTableUpdate {
 
 func (s *ipfwTableInfo) getProtoType() proto.IpfwTableUpdate_IpfwTableType {
 	switch s.Type {
-	case ipfwtable.IpfwTableTypeHashIP:
+	case ipfwtable.IpfwTableTypeIP:
 		return proto.IpfwTableUpdate_IP
-	case ipfwtable.IpfwTableTypeHashIPPort:
-		return proto.IpfwTableUpdate_IP_AND_PORT
-	case ipfwtable.IpfwTableTypeHashNet:
+	case ipfwtable.IpfwTableTypeNet:
 		return proto.IpfwTableUpdate_NET
 	default:
 		log.WithField("IpfwTableType", s.Type).Panic("unknown IpfwTableType")
