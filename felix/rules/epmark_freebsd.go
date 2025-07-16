@@ -16,7 +16,6 @@ package rules
 
 import (
 	"errors"
-	"hash/fnv"
 	"io"
 
 	"github.com/projectcalico/calico/felix/tagnum"

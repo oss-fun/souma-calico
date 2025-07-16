@@ -90,7 +90,7 @@ const (
 	ChainDispatchFromEndPointTag         = ChainNamePrefix + "from-endpoint-tag"
 
 	ChainForwardCheck        = ChainNamePrefix + "forward-check"
-	ChainForwardEndpointMark = ChainNamePrefix + "forward-endpoint-mark"
+	ChainForwardEndpointTag = ChainNamePrefix + "forward-endpoint-tag"
 
 	ChainSetWireguardIncomingMark = ChainNamePrefix + "wireguard-incoming-mark"
 
@@ -185,18 +185,17 @@ type RuleRenderer interface {
 	StaticNATTableChains(ipVersion uint8) []*ipfw.Chain
 	StaticNATPostroutingChains(ipVersion uint8) []*ipfw.Chain
 	StaticRawTableChains(ipVersion uint8) []*ipfw.Chain
-	StaticBPFModeRawChains(ipVersion uint8, wgEncryptHost, disableConntrack bool) []*ipfw.Chain
 	StaticMangleTableChains(ipVersion uint8) []*ipfw.Chain
 	StaticFilterForwardAppendRules() []ipfw.Rule
 
 	WorkloadDispatchChains(map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint) []*ipfw.Chain
-	WorkloadEndpointToipfwChains(ifaceName string, epTagMapper EndpointTagMapper, adminUp bool, ingressPolicies []*PolicyGroup, egressPolicies []*PolicyGroup, profileIDs []string) []*ipfw.Chain
-	PolicyGroupToipfwChains(group *PolicyGroup) []*ipfw.Chain
+	WorkloadEndpointToIpfwChains(ifaceName string, epTagMapper EndpointTagMapper, adminUp bool, ingressPolicies []*PolicyGroup, egressPolicies []*PolicyGroup, profileIDs []string) []*ipfw.Chain
+	PolicyGroupToIpfwChains(group *PolicyGroup) []*ipfw.Chain
 
 	WorkloadInterfaceAllowChains(endpoints map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint) []*ipfw.Chain
 
-	EndpointMarkDispatchChains(
-		epMarkMapper EndpointTagMapper,
+	EndpointTagDispatchChains(
+		epTagMapper EndpointTagMapper,
 		wlEndpoints map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint,
 		hepEndpoints map[string]proto.HostEndpointID,
 	) []*ipfw.Chain
@@ -206,7 +205,7 @@ type RuleRenderer interface {
 	ToHostDispatchChains(map[string]proto.HostEndpointID, string) []*ipfw.Chain
 	HostEndpointToFilterChains(
 		ifaceName string,
-		epMarkMapper EndpointTagMapper,
+		epTagMapper EndpointTagMapper,
 		ingressPolicies []*PolicyGroup,
 		egressPolicies []*PolicyGroup,
 		ingressForwardPolicies []*PolicyGroup,
@@ -232,20 +231,18 @@ type RuleRenderer interface {
 		preDNATPolicies []*PolicyGroup,
 	) []*ipfw.Chain
 
-	PolicyToipfwChains(policyID *proto.PolicyID, policy *proto.Policy, ipVersion uint8) []*ipfw.Chain
-	ProfileToipfwChains(profileID *proto.ProfileID, policy *proto.Profile, ipVersion uint8) (inbound, outbound *ipfw.Chain)
-	ProtoRuleToipfwRules(pRule *proto.Rule, ipVersion uint8) []ipfw.Rule
+	PolicyToIpfwChains(policyID *proto.PolicyID, policy *proto.Policy, ipVersion uint8) []*ipfw.Chain
+	ProfileToIpfwChains(profileID *proto.ProfileID, policy *proto.Profile, ipVersion uint8) (inbound, outbound *ipfw.Chain)
+	ProtoRuleToIpfwRules(pRule *proto.Rule, ipVersion uint8) []ipfw.Rule
 
 	MakeNatOutgoingRule(protocol string, action ipfw.Action, ipVersion uint8) ipfw.Rule
 	NATOutgoingChain(active bool, ipVersion uint8) *ipfw.Chain
 
-	DNATsToipfwChains(dnats map[string]string) []*ipfw.Chain
-	SNATsToipfwChains(snats map[string]string) []*ipfw.Chain
-	BlockedCIDRsToipfwChains(cidrs []string, ipVersion uint8) []*ipfw.Chain
+	DNATsToIpfwChains(dnats map[string]string) []*ipfw.Chain
+	SNATsToIpfwChains(snats map[string]string) []*ipfw.Chain
+	BlockedCIDRsToIpfwChains(cidrs []string, ipVersion uint8) []*ipfw.Chain
 
-	WireguardIncomingMarkChain() *ipfw.Chain
-
-	ipfwFilterDenyAction() ipfw.Action
+	IpfwFilterDenyAction() ipfw.Action
 }
 
 type DefaultRuleRenderer struct {
@@ -309,7 +306,7 @@ type Config struct {
 	WireguardEnabledV6          bool
 	WireguardInterfaceName      string
 	WireguardInterfaceNameV6    string
-	WireguardipfwMark       uint32
+	WireguardipfwTag           uint16
 	WireguardListeningPort      int
 	WireguardListeningPortV6    int
 	WireguardEncryptHostTraffic bool
@@ -380,7 +377,7 @@ func NewRenderer(config Config) RuleRenderer {
 	config.validate()
 
 	// First, what should we do when packets are not accepted.
-	var iptfwFilterDenyAction ipfw.Action
+	var ipfwFilterDenyAction ipfw.Action
 	log.Info("packets that are not passed by any policy or profile will be dropped.")
 	ipfwFilterDenyAction = ipfw.DenyAction{}
 
@@ -390,7 +387,7 @@ func NewRenderer(config Config) RuleRenderer {
 	switch config.EndpointToHostAction {
 	case "DROP":
 		log.Info("Workload to host packets will be dropped.")
-		inputAllowActions = []ipfw.Action{ipfw.DwnyAction{}}
+		inputAllowActions = []ipfw.Action{ipfw.DenyAction{}}
 	case "ACCEPT":
 		log.Info("Workload to host packets will be accepted.")
 		inputAllowActions = []ipfw.Action{ipfw.AllowAction{}}
@@ -419,7 +416,7 @@ func NewRenderer(config Config) RuleRenderer {
 
 	return &DefaultRuleRenderer{
 		Config:               config,
-		inputAllowActions:    inputAcceptActions,
+		inputAllowActions:    inputAllowActions,
 		filterAllowAction:    filterAllowAction,
 		mangleAllowAction:    mangleAllowAction,
 		blockCIDRAction:      blockCIDRAction,
