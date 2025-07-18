@@ -20,38 +20,37 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
+	"github.com/projectcalico/calico/felix/ipfwtable"
 	"github.com/projectcalico/calico/felix/dataplane/common"
 	"github.com/projectcalico/calico/libcalico-go/lib/set"
 )
 
-// hostIPManager monitors updates from ifacemonitor for host ip update events. It then flushes host ips into an ipset.
 type hostIPManager struct {
 	nonHostIfacesRegexp *regexp.Regexp
-	// hostIfaceToAddrs maps host interface name to the set of IPs on that interface (reported from the dataplane).
 	hostIfaceToAddrs map[string]set.Set[string]
 
-	hostIPSetID     string
-	ipsetsDataplane common.IPSetsDataplane
+	hostIpfwTableID     string
+	ipfwTableDataplane common.IpfwTableDataplane
 	maxSize         int
 }
 
 func newHostIPManager(wlIfacesPrefixes []string,
-	ipSetID string,
-	ipsets common.IPSetsDataplane,
-	maxIPSetSize int) *hostIPManager {
+	ipfwTableID string,
+	ipfwtable common.IpfwTableDataplane,
+	maxIpfwTableSize int) *hostIPManager {
 
 	return newHostIPManagerWithShims(
 		wlIfacesPrefixes,
-		ipSetID,
-		ipsets,
-		maxIPSetSize,
+		ipfwTableID,
+		ipfwtable,
+		maxIpfwTableSize,
 	)
 }
 
 func newHostIPManagerWithShims(wlIfacesPrefixes []string,
-	ipSetID string,
-	ipsets common.IPSetsDataplane,
-	maxIPSetSize int) *hostIPManager {
+	ipfwTableID string,
+	ipfwtable common.IpfwTableDataplane,
+	maxIpfwTableSize int) *hostIPManager {
 
 	wlIfacesPattern := "^(" + strings.Join(wlIfacesPrefixes, "|") + ").*"
 	wlIfacesRegexp := regexp.MustCompile(wlIfacesPattern)
@@ -59,9 +58,9 @@ func newHostIPManagerWithShims(wlIfacesPrefixes []string,
 	return &hostIPManager{
 		nonHostIfacesRegexp: wlIfacesRegexp,
 		hostIfaceToAddrs:    map[string]set.Set[string]{},
-		hostIPSetID:         ipSetID,
-		ipsetsDataplane:     ipsets,
-		maxSize:             maxIPSetSize,
+		hostIpfwTableID:         ipfwTableID,
+		ipfwTableDataplane:     ipfwtable,
+		maxSize:             maxIpfwTableSize,
 	}
 }
 
@@ -91,17 +90,15 @@ func (m *hostIPManager) OnUpdate(msg interface{}) {
 			delete(m.hostIfaceToAddrs, msg.Name)
 		}
 
-		// Host ip update is a relative rare event. Flush entire ipsets to make it simple.
-		metadata := ipsets.IPSetMetadata{
-			Type:    ipsets.IPSetTypeHashIP,
-			SetID:   m.hostIPSetID,
+		metadata := ipfwtable.IpfwTableMetadata{
+			Type:    ipfwtable.IpfwTableTypeIP,
+			SetID:   m.hostIpfwTableID,
 			MaxSize: m.maxSize,
 		}
-		m.ipsetsDataplane.AddOrReplaceIPSet(metadata, m.getCurrentMembers())
+		m.ipfwTableDataplane.AddOrReplaceIpfwTable(metadata, m.getCurrentMembers())
 	}
 }
 
 func (m *hostIPManager) CompleteDeferredWork() error {
-	// Nothing to do, we don't defer any work.
 	return nil
 }

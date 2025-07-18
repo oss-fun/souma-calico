@@ -8,7 +8,7 @@ import (
 )
 
 type IpfwTableDataplane interface {
-	AddOrReplaceTable(setMetadata ipfwtable.IpfwTableMetadata, members []string)
+	AddOrReplaceIpfwTable(setMetadata ipfwtable.IpfwTableMetadata, members []string)
 	AddMembers(setID string, newMembers []string)
 	RemoveMembers(setID string, removedMembers []string)
 	RemoveTable(setID string)
@@ -39,3 +39,6 @@ func NewIpfwTableManager(name string, ipfwtable_ IpfwTableDataplane, maxIpfwTabl
 	return m
 }
 
+func (m *IpfwTableManager) CompleteDeferredWork() error {
+	return nil
+}

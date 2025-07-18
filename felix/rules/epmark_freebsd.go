@@ -42,13 +42,11 @@ type DefaultEPTagManager struct {
 	activeTagToEndpoint map[uint16]string
 }
 
-func NewEndpointTagMapper(nonCaliTag []uint16) EndpointTagMapper {
+func NewEndpointTagMapper(nonCaliTag uint16) EndpointTagMapper {
 	tagNumManager := tagnum.NewTagNumManager("endpoint-ipfw-tag")
 
-	for _, tag := range nonCaliTag {
-		if err := tagNumManager.SetUsedNum(tag); err != nil {
-			return nil
-		}
+	if err := tagNumManager.SetUsedNum(tag); err != nil {
+		return nil
 	}
 
 	eptm := &DefaultEPTagManager {

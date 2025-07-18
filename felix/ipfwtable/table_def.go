@@ -7,9 +7,39 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 
+	cprometheus "github.com/projectcalico/calico/libcalico-go/lib/prometheus"
+
 	"github.com/projectcalico/calico/felix/ip"
+)
+
+var (
+	gaugeVecNumCalicoIpfwTable = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "felix_ipfw_table_calico",
+		Help: "Number of active Calico Ipfw table.",
+	}, []string{"ip_version"})
+	gaugeNumTotalIpfwTable = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "felix_ipfw_table_total",
+		Help: "Total number of active Ipfw table.",
+	})
+	countNumIpfwTableCalls = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "felix_ipfw_table_calls",
+		Help: "Number of ipfw table commands executed.",
+	})
+	countNumIpfwTableErrors = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "felix_ipfw_table_errors",
+		Help: "Number of ipfw table command failures.",
+	})
+	countNumIpfwTableLinesExecuted = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "felix_ipfw_table_lines_executed",
+		Help: "Number of ipfw table operations executed.",
+	})
+	summaryExecStart = cprometheus.NewSummary(prometheus.SummaryOpts{
+		Name: "felix_exec_time_micros",
+		Help: "Summary of time taken to fork/exec child processes",
+	})
 )
 
 const MaxIpfwTableNameLength = 63
@@ -49,6 +79,14 @@ func (t IpfwTableType) CanonicaliseMember(member string) IpfwTableMember {
 	}
 	log.WithField("type", string(t)).Panic("Unknown TableType")
 	return nil
+}
+
+func (t IpfwTableType) IsValid() bool {
+	switch t {
+	case IpfwTableTypeIP, IpfwTableTypeNet, IpfwTableTypeIface, IpfwTableTypePort:
+		return true
+	}
+	return false
 }
 
 type IpfwTableMember interface {
@@ -150,11 +188,11 @@ func (c IPVersionConfig) NameForMainIpfwTable(id string) string {
 	return combineAndTrunc(c.mainTableNamePrefix, id, MaxIpfwTableNameLength)
 }
 
-func (c IPVersionConfig) OwnsIPSet(name string) bool {
+func (c IPVersionConfig) OwnsIpfwTable(name string) bool {
 	return c.ourNamePrefixesRegexp.MatchString(name)
 }
 
-func (c IPVersionConfig) IsTempIPSetName(Name string) bool {
+func (c IPVersionConfig) IsTempIpfwTableName(Name string) bool {
 	return strings.HasPrefix(Name, c.tempTableNamePrefix)
 }
 

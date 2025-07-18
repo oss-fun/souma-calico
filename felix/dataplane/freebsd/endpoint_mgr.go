@@ -125,7 +125,7 @@ type endpointManager struct {
 	floatingIPsEnabled     bool
 
 	// Our dependencies.
-	allRuleset   IpfwRuleset
+	allRuleset   IpfwRuleSet
 	ruleRenderer rules.RuleRenderer
 	routeTable   routetable.RouteTableInterface
 	writeProcSys procSysWriter
@@ -206,7 +206,7 @@ type EndpointStatusUpdateCallback func(ipVersion uint8, id interface{}, status s
 type procSysWriter func(path, value string) error
 
 func newEndpointManager(
-	allRuleset IpfwRuleset,
+	allRuleset IpfwRuleSet,
 	ruleRenderer rules.RuleRenderer,
 	routeTable routetable.RouteTableInterface,
 	ipVersion uint8,
@@ -236,7 +236,7 @@ func newEndpointManager(
 }
 
 func newEndpointManagerWithShims(
-	allRuleset IpfwRuleset,
+	allRuleset IpfwRuleSet,
 	ruleRenderer rules.RuleRenderer,
 	routeTable routetable.RouteTableInterface,
 	ipVersion uint8,
@@ -257,8 +257,6 @@ func newEndpointManagerWithShims(
 		ipVersion:              ipVersion,
 		wlIfacesRegexp:         wlIfacesRegexp,
 		kubeIPVSSupportEnabled: kubeIPVSSupportEnabled,
-		bpfEnabled:             bpfEnabled,
-		bpfEndpointManager:     bpfEndpointManager,
 		floatingIPsEnabled:     floatingIPsEnabled,
 
 		allRuleset:   allRuleset,
@@ -627,7 +625,7 @@ func (m *endpointManager) resolveWorkloadEndpoints() {
 
 	removeActiveWorkload := func(logCxt *log.Entry, oldWorkload *proto.WorkloadEndpoint, id proto.WorkloadEndpointID) {
 		m.callbacks.InvokeRemoveWorkload(oldWorkload)
-		m.filterTable.RemoveChains(m.activeWlIDToChains[id])
+		m.allRuleset.RemoveChains(m.activeWlIDToChains[id])
 		delete(m.activeWlIDToChains, id)
 		if oldWorkload != nil {
 			m.epTagMapper.ReleaseEndpointTag(oldWorkload.Name)
@@ -683,14 +681,6 @@ func (m *endpointManager) resolveWorkloadEndpoints() {
 				if oldWorkload != nil && oldWorkload.Name != workload.Name {
 					logCxt.Debug("Interface name changed, cleaning up old state")
 					m.epTagMapper.ReleaseEndpointTag(oldWorkload.Name)
-					if !m.bpfEnabled {
-						m.filterTable.RemoveChains(m.activeWlIDToChains[id])
-						if m.hasSourceSpoofingConfiguration(oldWorkload.Name) {
-							logCxt.Debugf("Removing RPF configuration for workload %s", workload.Name)
-							delete(m.sourceSpoofingConfig, workload.Name)
-							m.rpfSkipChainDirty = true
-						}
-					}
 					m.routeTable.SetRoutes(oldWorkload.Name, nil)
 					m.wlIfaceNamesToReconfigure.Discard(oldWorkload.Name)
 					delete(m.activeWlIfaceNameToID, oldWorkload.Name)
@@ -701,18 +691,17 @@ func (m *endpointManager) resolveWorkloadEndpoints() {
 					egressPolicyNames = workload.Tiers[0].EgressPolicies
 				}
 				adminUp := workload.State == "active"
-				if !m.bpfEnabled {
-					m.updateWorkloadEndpointChains(id, workload, ingressPolicyNames, egressPolicyNames, adminUp)
+				
+				m.updateWorkloadEndpointChains(id, workload, ingressPolicyNames, egressPolicyNames, adminUp)
 
-					if len(workload.AllowSpoofedSourcePrefixes) > 0 && !m.hasSourceSpoofingConfiguration(workload.Name) {
-						logCxt.Infof("Disabling RPF check for workload %s", workload.Name)
-						m.sourceSpoofingConfig[workload.Name] = workload.AllowSpoofedSourcePrefixes
-						m.rpfSkipChainDirty = true
-					} else if m.hasSourceSpoofingConfiguration(workload.Name) && len(workload.AllowSpoofedSourcePrefixes) == 0 {
-						logCxt.Infof("Enabling RPF check for workload %s (previously disabled)", workload.Name)
-						delete(m.sourceSpoofingConfig, workload.Name)
-						m.rpfSkipChainDirty = true
-					}
+				if len(workload.AllowSpoofedSourcePrefixes) > 0 && !m.hasSourceSpoofingConfiguration(workload.Name) {
+					logCxt.Infof("Disabling RPF check for workload %s", workload.Name)
+					m.sourceSpoofingConfig[workload.Name] = workload.AllowSpoofedSourcePrefixes
+					m.rpfSkipChainDirty = true
+				} else if m.hasSourceSpoofingConfiguration(workload.Name) && len(workload.AllowSpoofedSourcePrefixes) == 0 {
+					logCxt.Infof("Enabling RPF check for workload %s (previously disabled)", workload.Name)
+					delete(m.sourceSpoofingConfig, workload.Name)
+					m.rpfSkipChainDirty = true
 				}
 
 				// Collect the IP prefixes that we want to route locally to this endpoint:
@@ -801,10 +790,10 @@ func (m *endpointManager) resolveWorkloadEndpoints() {
 		}
 	}
 
-	if !m.bpfEnabled && m.needToCheckDispatchChains {
+	if m.needToCheckDispatchChains {
 		// Rewrite the dispatch chains if they've changed.
 		newDispatchChains := m.ruleRenderer.WorkloadDispatchChains(m.activeWlEndpoints)
-		m.updateDispatchChains(m.activeWlDispatchChains, newDispatchChains, m.filterTable)
+		m.updateDispatchChains(m.activeWlDispatchChains, newDispatchChains, m.allRuleset)
 		m.needToCheckDispatchChains = false
 
 		// Set flag to update endpoint mark chains.
@@ -845,7 +834,7 @@ func (m *endpointManager) updateWorkloadEndpointChains(
 		egressGroups,
 		workload.ProfileIds,
 	)
-	m.filterTable.UpdateChains(chains)
+	m.allRuleset.UpdateChains(chains)
 	m.activeWlIDToChains[id] = chains
 }
 
@@ -876,21 +865,17 @@ func (m *endpointManager) updateRPFSkipChain() {
 		for _, addr := range addresses {
 			chain.Rules = append(chain.Rules, ipfw.Rule{
 				Match:  ipfw.Match().InInterface(interfaceName).SourceNet(addr),
-				Action: ipfw.AcceptAction{},
+				Action: ipfw.AllowAction{},
 			})
 		}
 	}
-	m.rawTable.UpdateChain(chain)
+	m.allRuleset.UpdateChain(chain)
 }
 
 func (m *endpointManager) resolveEndpointTags() {
-	if m.bpfEnabled {
-		return
-	}
-
 	// Render endpoint mark chains for active workload and host endpoint.
 	newEndpointTagDispatchChains := m.ruleRenderer.EndpointTagDispatchChains(m.epTagMapper, m.activeWlEndpoints, m.activeIfaceNameToHostEpID)
-	m.updateDispatchChains(m.activeEPTagDispatchChains, newEndpointTagDispatchChains, m.filterTable)
+	m.updateDispatchChains(m.activeEPTagDispatchChains, newEndpointTagDispatchChains, m.allRuleset)
 }
 
 func (m *endpointManager) resolveHostEndpoints() map[string]proto.HostEndpointID {
@@ -1000,18 +985,6 @@ func (m *endpointManager) resolveHostEndpoints() map[string]proto.HostEndpointID
 		newIfaceNameToHostEpID[allInterfaces] = bestHostEpId
 	}
 
-	if m.bpfEndpointManager != nil {
-		// Construct map of interface names to host endpoints, and pass to the BPF endpoint
-		// manager.
-		hostIfaceToEpMap := map[string]proto.HostEndpoint{}
-		for ifaceName, id := range newIfaceNameToHostEpID {
-			// Note, dereference the proto.HostEndpoint here so that the data lifetime
-			// is decoupled from the validity of the pointer here.
-			hostIfaceToEpMap[ifaceName] = *m.rawHostEndpoints[id]
-		}
-		m.bpfEndpointManager.OnHEPUpdate(hostIfaceToEpMap)
-	}
-
 	return newIfaceNameToHostEpID
 }
 
@@ -1074,111 +1047,109 @@ func (m *endpointManager) updateHostEndpoints() {
 		ifaceNameToPolicyGroups[ifaceName] = append(ifaceNameToPolicyGroups[ifaceName], pgs...)
 	}
 
-	if !m.bpfEnabled {
-		// Build ipfw chains for normal and apply-on-forward host endpoint policy.
-		newHostIfaceFiltChains := map[string][]*ipfw.Chain{}
-		newHostIfaceMangleEgressChains := map[string][]*ipfw.Chain{}
-		for ifaceName, id := range newIfaceNameToHostEpID {
-			log.WithField("id", id).Info("Updating host endpoint normal policy chains.")
-			hostEp := m.rawHostEndpoints[id]
+	// Build ipfw chains for normal and apply-on-forward host endpoint policy.
+	newHostIfaceFiltChains := map[string][]*ipfw.Chain{}
+	newHostIfaceMangleEgressChains := map[string][]*ipfw.Chain{}
+	for ifaceName, id := range newIfaceNameToHostEpID {
+		log.WithField("id", id).Info("Updating host endpoint normal policy chains.")
+		hostEp := m.rawHostEndpoints[id]
 
-			// Update chains in the filter and mangle tables, for normal traffic.
-			var ingressPolicyNames, egressPolicyNames []string
-			var ingressForwardPolicyNames, egressForwardPolicyNames []string
-			if len(hostEp.Tiers) > 0 {
-				ingressPolicyNames = hostEp.Tiers[0].IngressPolicies
-				egressPolicyNames = hostEp.Tiers[0].EgressPolicies
-			}
-			if len(hostEp.ForwardTiers) > 0 {
-				ingressForwardPolicyNames = hostEp.ForwardTiers[0].IngressPolicies
-				egressForwardPolicyNames = hostEp.ForwardTiers[0].EgressPolicies
-			}
-
-			ingressGroups := m.groupPolicies("default", ingressPolicyNames, rules.PolicyDirectionInbound)
-			addPolicyGroups(ifaceName, ingressGroups)
-			egressGroups := m.groupPolicies("default", egressPolicyNames, rules.PolicyDirectionOutbound)
-			addPolicyGroups(ifaceName, egressGroups)
-			ingressForwardGroups := m.groupPolicies("default", ingressForwardPolicyNames, rules.PolicyDirectionInbound)
-			addPolicyGroups(ifaceName, ingressForwardGroups)
-			egressForwardGroups := m.groupPolicies("default", egressForwardPolicyNames, rules.PolicyDirectionOutbound)
-			addPolicyGroups(ifaceName, egressForwardGroups)
-
-			filtChains := m.ruleRenderer.HostEndpointToFilterChains(
-				ifaceName,
-				m.epTagMapper,
-				ingressGroups,
-				egressGroups,
-				ingressForwardGroups,
-				egressForwardGroups,
-				hostEp.ProfileIds,
-			)
-
-			if !reflect.DeepEqual(filtChains, m.activeHostIfaceToFiltChains[ifaceName]) {
-				m.filterTable.UpdateChains(filtChains)
-			}
-			newHostIfaceFiltChains[ifaceName] = filtChains
-			delete(m.activeHostIfaceToFiltChains, ifaceName)
-
-			mangleChains := m.ruleRenderer.HostEndpointToMangleEgressChains(
-				ifaceName,
-				egressGroups,
-				hostEp.ProfileIds,
-			)
-			if !reflect.DeepEqual(mangleChains, m.activeHostIfaceToMangleEgressChains[ifaceName]) {
-				m.mangleTable.UpdateChains(mangleChains)
-			}
-			newHostIfaceMangleEgressChains[ifaceName] = mangleChains
-			delete(m.activeHostIfaceToMangleEgressChains, ifaceName)
+		// Update chains in the filter and mangle tables, for normal traffic.
+		var ingressPolicyNames, egressPolicyNames []string
+		var ingressForwardPolicyNames, egressForwardPolicyNames []string
+		if len(hostEp.Tiers) > 0 {
+			ingressPolicyNames = hostEp.Tiers[0].IngressPolicies
+			egressPolicyNames = hostEp.Tiers[0].EgressPolicies
+		}
+		if len(hostEp.ForwardTiers) > 0 {
+			ingressForwardPolicyNames = hostEp.ForwardTiers[0].IngressPolicies
+			egressForwardPolicyNames = hostEp.ForwardTiers[0].EgressPolicies
 		}
 
-		// Build ipfw chains for pre-DNAT host endpoint policy.
-		newHostIfaceMangleIngressChains := map[string][]*ipfw.Chain{}
-		for ifaceName, id := range newPreDNATIfaceNameToHostEpID {
-			log.WithField("id", id).Info("Updating host endpoint mangle ingress chains.")
-			hostEp := m.rawHostEndpoints[id]
+		ingressGroups := m.groupPolicies("default", ingressPolicyNames, rules.PolicyDirectionInbound)
+		addPolicyGroups(ifaceName, ingressGroups)
+		egressGroups := m.groupPolicies("default", egressPolicyNames, rules.PolicyDirectionOutbound)
+		addPolicyGroups(ifaceName, egressGroups)
+		ingressForwardGroups := m.groupPolicies("default", ingressForwardPolicyNames, rules.PolicyDirectionInbound)
+		addPolicyGroups(ifaceName, ingressForwardGroups)
+		egressForwardGroups := m.groupPolicies("default", egressForwardPolicyNames, rules.PolicyDirectionOutbound)
+		addPolicyGroups(ifaceName, egressForwardGroups)
 
-			// Update the mangle table for preDNAT policy.
-			var ingressPolicyNames []string
-			if len(hostEp.PreDnatTiers) > 0 {
-				ingressPolicyNames = hostEp.PreDnatTiers[0].IngressPolicies
-			}
-			ingressGroups := m.groupPolicies("default", ingressPolicyNames, rules.PolicyDirectionInbound)
-			addPolicyGroups(ifaceName, ingressGroups)
-			mangleChains := m.ruleRenderer.HostEndpointToMangleIngressChains(
-				ifaceName,
-				ingressGroups,
-			)
-			if !reflect.DeepEqual(mangleChains, m.activeHostIfaceToMangleIngressChains[ifaceName]) {
-				m.mangleTable.UpdateChains(mangleChains)
-			}
-			newHostIfaceMangleIngressChains[ifaceName] = mangleChains
-			delete(m.activeHostIfaceToMangleIngressChains, ifaceName)
-		}
+		filtChains := m.ruleRenderer.HostEndpointToFilterChains(
+			ifaceName,
+			m.epTagMapper,
+			ingressGroups,
+			egressGroups,
+			ingressForwardGroups,
+			egressForwardGroups,
+			hostEp.ProfileIds,
+		)
 
-		// Remove normal, apply-on-forward and pre-DNAT policy ipfw chains that are no
-		// longer wanted.
-		for ifaceName, chains := range m.activeHostIfaceToFiltChains {
-			log.WithField("ifaceName", ifaceName).Info(
-				"Host interface no longer protected, deleting its normal chains.")
-			m.filterTable.RemoveChains(chains)
+		if !reflect.DeepEqual(filtChains, m.activeHostIfaceToFiltChains[ifaceName]) {
+			m.allRuleset.UpdateChains(filtChains)
 		}
-		for ifaceName, chains := range m.activeHostIfaceToMangleEgressChains {
-			log.WithField("ifaceName", ifaceName).Info(
-				"Host interface no longer protected, deleting its mangle egress chains.")
-			m.mangleTable.RemoveChains(chains)
-		}
-		for ifaceName, chains := range m.activeHostIfaceToMangleIngressChains {
-			log.WithField("ifaceName", ifaceName).Info(
-				"Host interface no longer protected, deleting its preDNAT chains.")
-			m.mangleTable.RemoveChains(chains)
-		}
+		newHostIfaceFiltChains[ifaceName] = filtChains
+		delete(m.activeHostIfaceToFiltChains, ifaceName)
 
-		m.callbacks.InvokeInterfaceCallbacks(m.activeIfaceNameToHostEpID, newIfaceNameToHostEpID)
-
-		m.activeHostIfaceToFiltChains = newHostIfaceFiltChains
-		m.activeHostIfaceToMangleEgressChains = newHostIfaceMangleEgressChains
-		m.activeHostIfaceToMangleIngressChains = newHostIfaceMangleIngressChains
+		mangleChains := m.ruleRenderer.HostEndpointToMangleEgressChains(
+			ifaceName,
+			egressGroups,
+			hostEp.ProfileIds,
+		)
+		if !reflect.DeepEqual(mangleChains, m.activeHostIfaceToMangleEgressChains[ifaceName]) {
+			m.allRuleset.UpdateChains(mangleChains)
+		}
+		newHostIfaceMangleEgressChains[ifaceName] = mangleChains
+		delete(m.activeHostIfaceToMangleEgressChains, ifaceName)
 	}
+
+	// Build ipfw chains for pre-DNAT host endpoint policy.
+	newHostIfaceMangleIngressChains := map[string][]*ipfw.Chain{}
+	for ifaceName, id := range newPreDNATIfaceNameToHostEpID {
+		log.WithField("id", id).Info("Updating host endpoint mangle ingress chains.")
+		hostEp := m.rawHostEndpoints[id]
+
+		// Update the mangle table for preDNAT policy.
+		var ingressPolicyNames []string
+		if len(hostEp.PreDnatTiers) > 0 {
+			ingressPolicyNames = hostEp.PreDnatTiers[0].IngressPolicies
+		}
+		ingressGroups := m.groupPolicies("default", ingressPolicyNames, rules.PolicyDirectionInbound)
+		addPolicyGroups(ifaceName, ingressGroups)
+		mangleChains := m.ruleRenderer.HostEndpointToMangleIngressChains(
+			ifaceName,
+			ingressGroups,
+		)
+		if !reflect.DeepEqual(mangleChains, m.activeHostIfaceToMangleIngressChains[ifaceName]) {
+			m.allRuleset.UpdateChains(mangleChains)
+		}
+		newHostIfaceMangleIngressChains[ifaceName] = mangleChains
+		delete(m.activeHostIfaceToMangleIngressChains, ifaceName)
+	}
+
+	// Remove normal, apply-on-forward and pre-DNAT policy ipfw chains that are no
+	// longer wanted.
+	for ifaceName, chains := range m.activeHostIfaceToFiltChains {
+		log.WithField("ifaceName", ifaceName).Info(
+			"Host interface no longer protected, deleting its normal chains.")
+		m.allRuleset.RemoveChains(chains)
+	}
+	for ifaceName, chains := range m.activeHostIfaceToMangleEgressChains {
+		log.WithField("ifaceName", ifaceName).Info(
+			"Host interface no longer protected, deleting its mangle egress chains.")
+		m.allRuleset.RemoveChains(chains)
+	}
+	for ifaceName, chains := range m.activeHostIfaceToMangleIngressChains {
+		log.WithField("ifaceName", ifaceName).Info(
+			"Host interface no longer protected, deleting its preDNAT chains.")
+		m.allRuleset.RemoveChains(chains)
+	}
+
+	m.callbacks.InvokeInterfaceCallbacks(m.activeIfaceNameToHostEpID, newIfaceNameToHostEpID)
+
+	m.activeHostIfaceToFiltChains = newHostIfaceFiltChains
+	m.activeHostIfaceToMangleEgressChains = newHostIfaceMangleEgressChains
+	m.activeHostIfaceToMangleIngressChains = newHostIfaceMangleIngressChains
 
 	// Build ipfw chains for untracked host endpoint policy.
 	newHostIfaceRawChains := map[string][]*ipfw.Chain{}
@@ -1193,28 +1164,19 @@ func (m *endpointManager) updateHostEndpoints() {
 			egressPolicyNames = hostEp.UntrackedTiers[0].EgressPolicies
 		}
 		var rawChains []*ipfw.Chain
-		if m.bpfEnabled {
-			egressGroups := m.groupPolicies("default", egressPolicyNames, rules.PolicyDirectionOutbound)
-			addPolicyGroups(ifaceName, egressGroups)
+		ingressGroups := m.groupPolicies("default", ingressPolicyNames, rules.PolicyDirectionInbound)
+		addPolicyGroups(ifaceName, ingressGroups)
+		egressGroups := m.groupPolicies("default", egressPolicyNames, rules.PolicyDirectionOutbound)
+		addPolicyGroups(ifaceName, egressGroups)
 
-			rawChains = append(rawChains, m.ruleRenderer.HostEndpointToRawEgressChain(
-				ifaceName,
-				egressGroups,
-			))
-		} else {
-			ingressGroups := m.groupPolicies("default", ingressPolicyNames, rules.PolicyDirectionInbound)
-			addPolicyGroups(ifaceName, ingressGroups)
-			egressGroups := m.groupPolicies("default", egressPolicyNames, rules.PolicyDirectionOutbound)
-			addPolicyGroups(ifaceName, egressGroups)
+		rawChains = m.ruleRenderer.HostEndpointToRawChains(
+			ifaceName,
+			ingressGroups,
+			egressGroups,
+		)
 
-			rawChains = m.ruleRenderer.HostEndpointToRawChains(
-				ifaceName,
-				ingressGroups,
-				egressGroups,
-			)
-		}
 		if !reflect.DeepEqual(rawChains, m.activeHostIfaceToRawChains[ifaceName]) {
-			m.rawTable.UpdateChains(rawChains)
+			m.allRuleset.UpdateChains(rawChains)
 		}
 		newHostIfaceRawChains[ifaceName] = rawChains
 		delete(m.activeHostIfaceToRawChains, ifaceName)
@@ -1224,7 +1186,7 @@ func (m *endpointManager) updateHostEndpoints() {
 	for ifaceName, chains := range m.activeHostIfaceToRawChains {
 		log.WithField("ifaceName", ifaceName).Info(
 			"Host interface no longer protected, deleting its untracked chains.")
-		m.rawTable.RemoveChains(chains)
+		m.allRuleset.RemoveChains(chains)
 	}
 
 	m.activeHostIfaceToRawChains = newHostIfaceRawChains
@@ -1252,18 +1214,8 @@ func (m *endpointManager) updateHostEndpoints() {
 	// egress policy even in BPF mode.
 	log.WithField("resolvedHostEpIds", newUntrackedIfaceNameToHostEpID).Debug("Rewrite raw dispatch chains?")
 	var newRawDispatchChains []*ipfw.Chain
-	if m.bpfEnabled {
-		newRawDispatchChains = m.ruleRenderer.ToHostDispatchChains(newUntrackedIfaceNameToHostEpID, "")
-	} else {
-		newRawDispatchChains = m.ruleRenderer.HostDispatchChains(newUntrackedIfaceNameToHostEpID, "", false)
-	}
-	m.updateDispatchChains(m.activeHostRawDispatchChains, newRawDispatchChains, m.rawTable)
-
-	if m.bpfEnabled {
-		// Code after this point is for other dispatch chains and IPVS endpoint marking,
-		// which aren't needed in BPF mode.
-		return
-	}
+	newRawDispatchChains = m.ruleRenderer.HostDispatchChains(newUntrackedIfaceNameToHostEpID, "", false)
+	m.updateDispatchChains(m.activeHostRawDispatchChains, newRawDispatchChains, m.allRuleset)
 
 	// Rewrite the filter dispatch chains if they've changed.
 	log.WithField("resolvedHostEpIds", newIfaceNameToHostEpID).Debug("Rewrite filter dispatch chains?")
@@ -1277,7 +1229,7 @@ func (m *endpointManager) updateHostEndpoints() {
 	}
 	newFilterDispatchChains := m.ruleRenderer.HostDispatchChains(newIfaceNameToHostEpID, defaultIfaceName, true)
 	newMangleEgressDispatchChains := m.ruleRenderer.ToHostDispatchChains(newIfaceNameToHostEpID, defaultIfaceName)
-	m.updateDispatchChains(m.activeHostFilterDispatchChains, newFilterDispatchChains, m.filterTable)
+	m.updateDispatchChains(m.activeHostFilterDispatchChains, newFilterDispatchChains, m.allRuleset)
 	// Set flag to update endpoint mark chains.
 	m.needToCheckEndpointTagChains = true
 
@@ -1292,7 +1244,7 @@ func (m *endpointManager) updateHostEndpoints() {
 	}
 	newMangleIngressDispatchChains := m.ruleRenderer.FromHostDispatchChains(newPreDNATIfaceNameToHostEpID, defaultIfaceName)
 	newMangleDispatchChains := append(newMangleIngressDispatchChains, newMangleEgressDispatchChains...)
-	m.updateDispatchChains(m.activeHostMangleDispatchChains, newMangleDispatchChains, m.mangleTable)
+	m.updateDispatchChains(m.activeHostMangleDispatchChains, newMangleDispatchChains, m.allRuleset)
 
 	log.Debug("Done resolving host endpoints.")
 }
@@ -1304,7 +1256,7 @@ func (m *endpointManager) updateHostEndpoints() {
 func (m *endpointManager) updateDispatchChains(
 	activeChains map[string]*ipfw.Chain,
 	newChains []*ipfw.Chain,
-	table IpfwTable,
+	table IpfwRuleSet,
 ) {
 	seenChains := set.New[string]()
 	for _, newChain := range newChains {
@@ -1430,7 +1382,7 @@ func (m *endpointManager) configureInterface(name string) error {
 	}
 
 	rpFilter := m.defaultRPFilter
-	if m.hasSourceSpoofingConfiguration(name) || m.bpfEnabled {
+	if m.hasSourceSpoofingConfiguration(name) {
 		rpFilter = "0"
 	}
 
@@ -1507,9 +1459,9 @@ func (m *endpointManager) increfGroups(groups []*rules.PolicyGroup) {
 		if refcnt == 0 {
 			// This group just became active.
 			chains := m.ruleRenderer.PolicyGroupToIpfwChains(group)
-			m.filterTable.UpdateChains(chains)
-			m.mangleTable.UpdateChains(chains)
-			m.rawTable.UpdateChains(chains)
+			m.allRuleset.UpdateChains(chains)
+			m.allRuleset.UpdateChains(chains)
+			m.allRuleset.UpdateChains(chains)
 		}
 		m.policyChainRefCounts[group.ChainName()] = refcnt + 1
 	}
@@ -1524,9 +1476,9 @@ func (m *endpointManager) decrefGroups(chainNames []string) {
 		if refcnt == 1 {
 			// This chain just became inactive.
 			log.WithField("chainName", chainName).Debug("Policy group chain no longer referenced.  Removing chain.")
-			m.filterTable.RemoveChainByName(chainName)
-			m.mangleTable.RemoveChainByName(chainName)
-			m.rawTable.RemoveChainByName(chainName)
+			m.allRuleset.RemoveChainByName(chainName)
+			m.allRuleset.RemoveChainByName(chainName)
+			m.allRuleset.RemoveChainByName(chainName)
 			delete(m.policyChainRefCounts, chainName)
 			continue
 		}

@@ -26,10 +26,10 @@ import (
 	"github.com/projectcalico/calico/felix/rules"
 )
 
-// policyManager simply renders policy/profile updates into iptables.Chain objects and sends
+// policyManager simply renders policy/profile updates into ipfw.Chain objects and sends
 // them to the dataplane layer.
 type policyManager struct {
-	ruleset          IpfwRuleset
+	ruleset          IpfwRuleSet
 	ruleRenderer     policyRenderer
 	ipVersion        uint8
 	rawEgressOnly    bool
@@ -39,11 +39,11 @@ type policyManager struct {
 }
 
 type policyRenderer interface {
-	PolicyToIptablesChains(policyID *proto.PolicyID, policy *proto.Policy, ipVersion uint8) []*iptables.Chain
-	ProfileToIptablesChains(profileID *proto.ProfileID, policy *proto.Profile, ipVersion uint8) (inbound, outbound *iptables.Chain)
+	PolicyToIpfwChains(policyID *proto.PolicyID, policy *proto.Policy, ipVersion uint8) []*ipfw.Chain
+	ProfileToIpfwChains(profileID *proto.ProfileID, policy *proto.Profile, ipVersion uint8) (inbound, outbound *ipfw.Chain)
 }
 
-func newPolicyManager(ruleset IpfwRuleset, ruleRenderer policyRenderer, ipVersion uint8) *policyManager {
+func newPolicyManager(ruleset IpfwRuleSet, ruleRenderer policyRenderer, ipVersion uint8) *policyManager {
 	return &policyManager{
 		ruleset:      ruleset,
 		ruleRenderer: ruleRenderer,
@@ -51,12 +51,12 @@ func newPolicyManager(ruleset IpfwRuleset, ruleRenderer policyRenderer, ipVersio
 	}
 }
 
-func newRawEgressPolicyManager(rawTable IptablesTable, ruleRenderer policyRenderer, ipVersion uint8,
+func newRawEgressPolicyManager(rawTable IpfwRuleSet, ruleRenderer policyRenderer, ipVersion uint8,
 	ipSetsCallback func(neededIPSets set.Set[string])) *policyManager {
 	return &policyManager{
 		rawTable:      rawTable,
-		mangleTable:   iptables.NewNoopTable(),
-		filterTable:   iptables.NewNoopTable(),
+		mangleTable:   ipfw.NewNoopTable(),
+		filterTable:   ipfw.NewNoopTable(),
 		ruleRenderer:  ruleRenderer,
 		ipVersion:     ipVersion,
 		rawEgressOnly: true,
@@ -76,10 +76,10 @@ func (m *policyManager) OnUpdate(msg interface{}) {
 			return
 		}
 		log.WithField("id", msg.Id).Debug("Updating policy chains")
-		chains := m.ruleRenderer.PolicyToIptablesChains(msg.Id, msg.Policy, m.ipVersion)
+		chains := m.ruleRenderer.PolicyToIpfwChains(msg.Id, msg.Policy, m.ipVersion)
 		if m.rawEgressOnly {
 			neededIPSets := set.New[string]()
-			filteredChains := []*iptables.Chain(nil)
+			filteredChains := []*ipfw.Chain(nil)
 			for _, chain := range chains {
 				if strings.Contains(chain.Name, string(rules.PolicyOutboundPfx)) {
 					filteredChains = append(filteredChains, chain)
@@ -91,7 +91,7 @@ func (m *policyManager) OnUpdate(msg interface{}) {
 		}
 		// We can't easily tell whether the policy is in use in a particular table, and, if the policy
 		// type gets changed it may move between tables.  Hence, we put the policy into all tables.
-		// The iptables layer will avoid programming it if it is not actually used.
+		// The ipfw layer will avoid programming it if it is not actually used.
 		m.rawTable.UpdateChains(chains)
 		m.mangleTable.UpdateChains(chains)
 		m.filterTable.UpdateChains(chains)
@@ -104,9 +104,9 @@ func (m *policyManager) OnUpdate(msg interface{}) {
 			return
 		}
 		log.WithField("id", msg.Id).Debug("Updating profile chains")
-		inbound, outbound := m.ruleRenderer.ProfileToIptablesChains(msg.Id, msg.Profile, m.ipVersion)
-		m.filterTable.UpdateChains([]*iptables.Chain{inbound, outbound})
-		m.mangleTable.UpdateChains([]*iptables.Chain{outbound})
+		inbound, outbound := m.ruleRenderer.ProfileToIpfwChains(msg.Id, msg.Profile, m.ipVersion)
+		m.filterTable.UpdateChains([]*ipfw.Chain{inbound, outbound})
+		m.mangleTable.UpdateChains([]*ipfw.Chain{outbound})
 	case *proto.ActiveProfileRemove:
 		log.WithField("id", msg.Id).Debug("Removing profile chains")
 		inName := rules.ProfileChainName(rules.ProfileInboundPfx, msg.Id)

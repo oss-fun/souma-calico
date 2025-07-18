@@ -21,7 +21,7 @@ import (
 
 	apiv3 "github.com/projectcalico/api/pkg/apis/projectcalico/v3"
 
-	"github.com/projectcalico/calico/felix/iptables"
+	"github.com/projectcalico/calico/felix/ipfw"
 	"github.com/projectcalico/calico/felix/proto"
 	"github.com/projectcalico/calico/felix/rules"
 )
@@ -62,7 +62,7 @@ import (
 // If (3) was omitted, the workload would receive a packet from a non-loopback interface with
 // SRC=<my own IP> DST=<my own IP>, and so would probably drop it.
 
-// floatingIPManager programs the 'cali-fip-dnat' and 'cali-fip-snat' chains in the iptables 'nat'
+// floatingIPManager programs the 'cali-fip-dnat' and 'cali-fip-snat' chains in the ipfw 'nat'
 // table with DNAT and SNAT rules for the floating IPs associated with local workload endpoints.
 // The cali-fip-dnat chain is statically linked from cali-OUTPUT and cali-PREROUTING, and
 // cali-fip-snat from cali-POSTROUTING.
@@ -70,7 +70,7 @@ type floatingIPManager struct {
 	ipVersion uint8
 
 	// Our dependencies.
-	natTable     IpfwRuleset
+	natTable     IpfwRuleSet
 	ruleRenderer rules.RuleRenderer
 
 	// Internal state.
@@ -82,7 +82,7 @@ type floatingIPManager struct {
 }
 
 func newFloatingIPManager(
-	natTable IpfwRuleset,
+	natTable IpfwRuleSet,
 	ruleRenderer rules.RuleRenderer,
 	ipVersion uint8,
 	enabled bool,
@@ -93,7 +93,7 @@ func newFloatingIPManager(
 		ipVersion:    ipVersion,
 
 		activeDNATChains: []*ipfw.Chain{},
-		activeSNATChains: []*iptfw.Chain{},
+		activeSNATChains: []*ipfw.Chain{},
 		natInfo:          map[proto.WorkloadEndpointID][]*proto.NatInfo{},
 		dirtyNATInfo:     true,
 		enabled:          enabled,
@@ -160,9 +160,9 @@ func (m *floatingIPManager) CompleteDeferredWork() error {
 			}
 		}
 		// Render chains for those NATs.
-		dnatChains := m.ruleRenderer.DNATsToIptablesChains(dnats)
-		snatChains := m.ruleRenderer.SNATsToIptablesChains(snats)
-		// Update iptables if they have changed.
+		dnatChains := m.ruleRenderer.DNATsToIpfwChains(dnats)
+		snatChains := m.ruleRenderer.SNATsToIpfwChains(snats)
+		// Update ipfw if they have changed.
 		if !reflect.DeepEqual(m.activeDNATChains, dnatChains) {
 			m.natTable.RemoveChains(m.activeDNATChains)
 			m.natTable.UpdateChains(dnatChains)

@@ -17,14 +17,14 @@ package intdataplane
 import (
 	"reflect"
 
-	"github.com/projectcalico/calico/felix/iptables"
+	"github.com/projectcalico/calico/felix/ipfw"
 	"github.com/projectcalico/calico/felix/proto"
 	"github.com/projectcalico/calico/felix/rules"
 )
 
-// The service loop manager maintains an iptables chain in the filter table whose purpose is to
+// The service loop manager maintains an ipfw chain in the filter table whose purpose is to
 // prevent forwarding to IPs within known service CIDRs.  Traffic that arrives on the node with such
-// IPs is supposed to be DNAT'd to an endpoint pod IP:port by kube-proxy iptables or IPVS rules.  If
+// IPs is supposed to be DNAT'd to an endpoint pod IP:port by kube-proxy ipfw or IPVS rules.  If
 // that doesn't happen, it means that target service IP:port isn't actually in use; and in that case
 // it's better for us to drop it, to avoid a possible routing loop between this node and this node's
 // default gateway.  The specific loop-generating scenario is when Calico is configured to advertise
@@ -35,16 +35,16 @@ type serviceLoopManager struct {
 	ipVersion uint8
 
 	// Our dependencies.
-	filterTable  IptablesTable
+	filterTable  IpfwRuleSet
 	ruleRenderer rules.RuleRenderer
 
 	// Internal state.
-	activeFilterChains     []*iptables.Chain
+	activeFilterChains     []*ipfw.Chain
 	pendingGlobalBGPConfig *proto.GlobalBGPConfigUpdate
 }
 
 func newServiceLoopManager(
-	filterTable IptablesTable,
+	filterTable IpfwRuleSet,
 	ruleRenderer rules.RuleRenderer,
 	ipVersion uint8,
 ) *serviceLoopManager {
@@ -52,7 +52,7 @@ func newServiceLoopManager(
 		ipVersion:              ipVersion,
 		filterTable:            filterTable,
 		ruleRenderer:           ruleRenderer,
-		activeFilterChains:     []*iptables.Chain{},
+		activeFilterChains:     []*ipfw.Chain{},
 		pendingGlobalBGPConfig: &proto.GlobalBGPConfigUpdate{},
 	}
 }
@@ -72,9 +72,9 @@ func (m *serviceLoopManager) CompleteDeferredWork() error {
 		blockedCIDRs = append(blockedCIDRs, m.pendingGlobalBGPConfig.GetServiceLoadbalancerCidrs()...)
 
 		// Render chains for those cluster CIDRs.
-		newFilterChains := m.ruleRenderer.BlockedCIDRsToIptablesChains(blockedCIDRs, m.ipVersion)
+		newFilterChains := m.ruleRenderer.BlockedCIDRsToIpfwChains(blockedCIDRs, m.ipVersion)
 
-		// Update iptables if they have changed.
+		// Update ipfw if they have changed.
 		if !reflect.DeepEqual(m.activeFilterChains, newFilterChains) {
 			m.filterTable.RemoveChains(m.activeFilterChains)
 			m.filterTable.UpdateChains(newFilterChains)
