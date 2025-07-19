@@ -74,6 +74,8 @@ const (
 
 	// Route cleanup grace period. Used for workload routes only.
 	routeCleanupGracePeriod = 10 * time.Second
+
+	UNIX_RT_TABLE_MAIN = 0x0
 )
 
 var (
@@ -277,6 +279,8 @@ type InternalDataplane struct {
 
 	debugHangC <-chan time.Time
 
+	endpointsSourceV4 endpointsSource
+	ipfwTableSourceV4 ipfwTableSource
 	callbacks         *common.Callbacks
 
 	loopSummarizer *logutils.Summarizer
@@ -299,6 +303,11 @@ const (
 	wireguardV6MTUOverhead = 80
 	aksMTUOverhead         = 100
 )
+
+type ipfwTableSource struct {
+}
+type endpointsSource struct {
+}
 
 func NewIntDataplaneDriver(config Config) *InternalDataplane {
 	log.WithField("config", config).Info("Creating internal FreeBSD dataplane driver.")
@@ -351,7 +360,6 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 		OpRecorder:            dp.loopSummarizer,
 	}
 
-	dataplaneFeatures := featureDetector.GetFeatures()
 	var ipfwLock sync.Locker
 	if config.IpfwLockTimeout <= 0 {
 		log.Debug("Calico implementation of ipfw lock disabled (by configuration).")
@@ -376,7 +384,7 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 	ipfwtableConfigV4 := config.RulesConfig.IpfwTableConfigV4
 	ipfwTableV4 := ipfwtable.NewIpfwTable(ipfwtableConfigV4, dp.loopSummarizer)
 	dp.allIpfwRuleSet = append(dp.allIpfwRuleSet, allRulesetV4)
-	dp.ipfwTable = append(dp.ipfwTable, ipfwtableV4)
+	dp.ipfwTable = append(dp.ipfwTable, ipfwTableV4)
 
 	dp.endpointStatusCombiner = newEndpointStatusCombiner(dp.fromDataplane, config.IPv6Enabled)
 
@@ -419,42 +427,19 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 		routeTableV4,
 		4,
 		epTagMapper,
-		config.RulesConfig.KubeIPVSSupportEnabled,
+		false,
 		config.RulesConfig.WorkloadIfacePrefixes,
 		dp.endpointStatusCombiner.OnEndpointStatusUpdate,
-		string(defaultRPFilter),
+		"",
 		callbacks,
 		config.FloatingIPsEnabled,
 	)
 	dp.RegisterManager(epManager)
 	dp.endpointsSourceV4 = epManager
-	dp.RegisterManager(newFloatingIPManager(natTableV4, ruleRenderer, 4, config.FloatingIPsEnabled))
-	dp.RegisterManager(newMasqManager(ipfwTableV4, natTableV4, ruleRenderer, config.MaxIpfwTableSize, 4))
+	dp.RegisterManager(newFloatingIPManager(allRulesetV4, ruleRenderer, 4, config.FloatingIPsEnabled))
+	dp.RegisterManager(newMasqManager(ipfwTableV4, allRulesetV4, ruleRenderer, config.MaxIpfwTableSize, 4))
 	
-	// Only clean up IPIP addresses if IPIP is implicitly disabled (no IPIP pools and not explicitly set in FelixConfig)
-	if config.RulesConfig.FelixConfigIPIPEnabled == nil {
-		// Start a cleanup goroutine not to block felix if it needs to retry
-		go cleanUpIPIPAddrs()
-	}
-
-	// Add a manager for IPv4 wireguard configuration. This is added irrespective of whether wireguard is actually enabled
-	// because it may need to tidy up some of the routing rules when disabled.
-	cryptoRouteTableWireguard := wireguard.New(config.Hostname, &config.Wireguard, 4, config.NetlinkTimeout,
-		config.DeviceRouteProtocol, func(publicKey wgtypes.Key) error {
-			if publicKey == zeroKey {
-				dp.fromDataplane <- &proto.WireguardStatusUpdate{PublicKey: "", IpVersion: 4}
-			} else {
-				dp.fromDataplane <- &proto.WireguardStatusUpdate{PublicKey: publicKey.String(), IpVersion: 4}
-			}
-			return nil
-		},
-		dp.loopSummarizer,
-		featureDetector,
-	)
-	dp.wireguardManager = newWireguardManager(cryptoRouteTableWireguard, config, 4)
-	dp.RegisterManager(dp.wireguardManager) // IPv4
-
-	dp.RegisterManager(newServiceLoopManager(filterTableV4, ruleRenderer, 4))
+	dp.RegisterManager(newServiceLoopManager(allRulesetV4, ruleRenderer, 4))
 
 	// Register that we will report liveness and readiness.
 	if config.HealthAggregator != nil {
@@ -586,34 +571,12 @@ func ConfigureDefaultMTUs(hostMTU int, c *Config) {
 		c.VXLANMTUV6 = hostMTU - vxlanV6MTUOverhead
 	}
 	if c.Wireguard.MTU == 0 {
-		if c.KubernetesProvider == config.ProviderAKS && c.Wireguard.EncryptHostTraffic {
-			// The default MTU on Azure is 1500, but the underlying network stack will fragment packets at 1400 bytes,
-			// see https://docs.microsoft.com/en-us/azure/virtual-network/virtual-network-tcpip-performance-tuning#azure-and-vm-mtu
-			// for details.
-			// Additionally, Wireguard sets the DF bit on its packets, and so if the MTU is set too high large packets
-			// will be dropped. Therefore it is necessary to allow for the difference between the MTU of the host and
-			// the underlying network.
-			log.Debug("Defaulting IPv4 Wireguard MTU based on host and AKS with WorkloadIPs")
-			c.Wireguard.MTU = hostMTU - aksMTUOverhead - wireguardMTUOverhead
-		} else {
-			log.Debug("Defaulting IPv4 Wireguard MTU based on host")
-			c.Wireguard.MTU = hostMTU - wireguardMTUOverhead
-		}
+		log.Debug("Defaulting IPv4 Wireguard MTU based on host")
+		c.Wireguard.MTU = hostMTU - wireguardMTUOverhead
 	}
 	if c.Wireguard.MTUV6 == 0 {
-		if c.KubernetesProvider == config.ProviderAKS && c.Wireguard.EncryptHostTraffic {
-			// The default MTU on Azure is 1500, but the underlying network stack will fragment packets at 1400 bytes,
-			// see https://docs.microsoft.com/en-us/azure/virtual-network/virtual-network-tcpip-performance-tuning#azure-and-vm-mtu
-			// for details.
-			// Additionally, Wireguard sets the DF bit on its packets, and so if the MTU is set too high large packets
-			// will be dropped. Therefore it is necessary to allow for the difference between the MTU of the host and
-			// the underlying network.
-			log.Debug("Defaulting IPv6 Wireguard MTU based on host and AKS with WorkloadIPs")
-			c.Wireguard.MTUV6 = hostMTU - aksMTUOverhead - wireguardV6MTUOverhead
-		} else {
-			log.Debug("Defaulting IPv6 Wireguard MTU based on host")
-			c.Wireguard.MTUV6 = hostMTU - wireguardV6MTUOverhead
-		}
+		log.Debug("Defaulting IPv6 Wireguard MTU based on host")
+		c.Wireguard.MTUV6 = hostMTU - wireguardV6MTUOverhead
 	}
 }
 
@@ -821,15 +784,6 @@ func NewIfaceStateUpdate(name string, state ifacemonitor.State, index int) any {
 // or if KubeIPVSInterface is DOWN and felix ipvs support is enabled (kube-proxy switched from ipvs to ipfw mode),
 // restart felix to pick up correct ipvs support mode.
 func (d *InternalDataplane) checkIPVSConfigOnStateUpdate(state ifacemonitor.State) {
-	ipvsIfacePresent := state != ifacemonitor.StateNotPresent
-	ipvsSupportEnabled := d.config.RulesConfig.KubeIPVSSupportEnabled
-	if ipvsSupportEnabled != ipvsIfacePresent {
-		log.WithFields(log.Fields{
-			"ipvsIfaceState": state,
-			"ipvsSupport":    ipvsSupportEnabled,
-		}).Info("kube-proxy mode changed. Restart felix.")
-		d.config.ConfigChangedRestartCallback()
-	}
 }
 
 // onIfaceAddrsChange is our interface address monitor callback.  It gets called
@@ -888,313 +842,27 @@ func (d *InternalDataplane) doStaticDataplaneConfig() {
 	// Check/configure global kernel parameters.
 	d.configureKernel()
 
-	if d.config.BPFEnabled {
-		d.setUpIpfwBPFEarly()
-		d.setUpIpfwBPF()
-	} else {
-		d.setUpIpfwNormal()
-	}
+	d.setUpIpfwNormal()
 
-	if d.config.RulesConfig.IPIPEnabled {
-		log.Info("IPIP enabled, starting thread to keep tunnel configuration in sync.")
-		go d.ipipManager.KeepIPIPDeviceInSync(
-			d.config.IPIPMTU,
-			d.config.RulesConfig.IPIPTunnelAddress,
-		)
-	} else {
-		log.Info("IPIP disabled. Not starting tunnel update thread.")
-	}
-}
-
-func bpfMarkPreestablishedFlowsRules() []ipfw.Rule {
-	return []ipfw.Rule{{
-		Match: ipfw.Match().
-			ConntrackState("ESTABLISHED,RELATED"),
-		Comment: []string{"Mark pre-established flows."},
-		Action: ipfw.SetMaskedMarkAction{
-			Mark: tcdefs.MarkLinuxConntrackEstablished,
-			Mask: tcdefs.MarkLinuxConntrackEstablishedMask,
-		},
-	}}
-}
-
-func (d *InternalDataplane) setUpIpfwBPF() {
-	rulesConfig := d.config.RulesConfig
-	for _, t := range d.ipfwFilterTables {
-		fwdRules := []ipfw.Rule{
-			{
-				// Bypass is a strong signal from the BPF program, it means that the flow is approved
-				// by the program at both ingress and egress.
-				Comment: []string{"Pre-approved by BPF programs."},
-				Match:   ipfw.Match().MarkMatchesWithMask(tcdefs.MarkSeenBypass, tcdefs.MarkSeenBypassMask),
-				Action:  ipfw.AcceptAction{},
-			},
-		}
-
-		var inputRules, outputRules []ipfw.Rule
-
-		// Handle packets for flows that pre-date the BPF programs.  The BPF program doesn't have any conntrack
-		// state for these so it allows them to fall through to ipfw with a mark set.
-		inputRules = append(inputRules,
-			ipfw.Rule{
-				Match: ipfw.Match().
-					MarkMatchesWithMask(tcdefs.MarkSeenFallThrough, tcdefs.MarkSeenFallThroughMask).
-					ConntrackState("ESTABLISHED,RELATED"),
-				Comment: []string{"Accept packets from flows that pre-date BPF."},
-				Action:  ipfw.AcceptAction{},
-			},
-			ipfw.Rule{
-				Match: ipfw.Match().
-					MarkMatchesWithMask(tcdefs.MarkSeenFallThrough, tcdefs.MarkSeenFallThroughMask).
-					Protocol("tcp"),
-				Comment: []string{"REJECT/rst packets from unknown TCP flows."},
-				Action:  ipfw.RejectAction{With: "tcp-reset"},
-			},
-			ipfw.Rule{
-				Match:   ipfw.Match().MarkMatchesWithMask(tcdefs.MarkSeenFallThrough, tcdefs.MarkSeenFallThroughMask),
-				Comment: []string{fmt.Sprintf("%s packets from unknown non-TCP flows.", d.ruleRenderer.IpfwFilterDenyAction())},
-				Action:  d.ruleRenderer.IpfwFilterDenyAction(),
-			},
-		)
-
-		// Mark traffic leaving the host that already has an established linux conntrack entry.
-		outputRules = append(outputRules, bpfMarkPreestablishedFlowsRules()...)
-
-		for _, prefix := range rulesConfig.WorkloadIfacePrefixes {
-			fwdRules = append(fwdRules,
-				// Drop/reject packets that have come from a workload but have not been through our BPF program.
-				ipfw.Rule{
-					Match:   ipfw.Match().InInterface(prefix+"+").NotMarkMatchesWithMask(tcdefs.MarkSeen, tcdefs.MarkSeenMask),
-					Action:  d.ruleRenderer.IpfwFilterDenyAction(),
-					Comment: []string{"From workload without BPF seen mark"},
-				},
-			)
-
-			if rulesConfig.EndpointToHostAction == "ACCEPT" {
-				// Only need to worry about ACCEPT here.  Drop gets compiled into the BPF program and
-				// RETURN would be a no-op since there's nothing to RETURN from.
-				inputRules = append(inputRules, ipfw.Rule{
-					Match:  ipfw.Match().InInterface(prefix+"+").MarkMatchesWithMask(tcdefs.MarkSeen, tcdefs.MarkSeenMask),
-					Action: ipfw.AcceptAction{},
-				})
-			}
-
-			// Catch any workload to host packets that haven't been through the BPF program.
-			inputRules = append(inputRules, ipfw.Rule{
-				Match:  ipfw.Match().InInterface(prefix+"+").NotMarkMatchesWithMask(tcdefs.MarkSeen, tcdefs.MarkSeenMask),
-				Action: d.ruleRenderer.IpfwFilterDenyAction(),
-			})
-		}
-
-		if rulesConfig.EndpointToHostAction != "ACCEPT" {
-			// We must accept WG traffic that goes towards the host. By this time, it is a
-			// SEEN traffic, so it was policed and accepted at a HEP. If the default INPUT
-			// chain policy was DROP, it would get dropped now, therefore an explicit accept
-			// is needed.
-			inputRules = append(inputRules, rules.FilterInputChainAllowWG(t.IPVersion, rulesConfig, ipfw.AcceptAction{})...)
-		}
-
-		if t.IPVersion == 6 {
-			if !d.config.BPFIpv6Enabled {
-				for _, prefix := range rulesConfig.WorkloadIfacePrefixes {
-					// In BPF ipv4 mode, drop ipv6 packets to pods.
-					fwdRules = append(fwdRules, ipfw.Rule{
-						Match:   ipfw.Match().OutInterface(prefix + "+"),
-						Action:  d.ruleRenderer.IpfwFilterDenyAction(),
-						Comment: []string{"To workload, drop IPv6."},
-					})
-				}
-			} else {
-				// ICMPv6 for router/neighbor soliciting are allowed towards the
-				// host, but the bpf programs cannot easily make sure that they
-				// only go to the host. Make sure that they are not forwarded.
-				fwdRules = append(fwdRules, rules.ICMPv6Filter(d.ruleRenderer.IpfwFilterDenyAction())...)
-			}
-		} else {
-			// Let the BPF programs know if Linux conntrack knows about the flow.
-			fwdRules = append(fwdRules, bpfMarkPreestablishedFlowsRules()...)
-			// The packet may be about to go to a local workload.  However, the local workload may not have a BPF
-			// program attached (yet).  To catch that case, we send the packet through a dispatch chain.  We only
-			// add interfaces to the dispatch chain if the BPF program is in place.
-			for _, prefix := range rulesConfig.WorkloadIfacePrefixes {
-				// Make sure ipfw rules don't drop packets that we're about to process through BPF.
-				fwdRules = append(fwdRules,
-					ipfw.Rule{
-						Match:   ipfw.Match().OutInterface(prefix + "+"),
-						Action:  ipfw.JumpAction{Target: rules.ChainToWorkloadDispatch},
-						Comment: []string{"To workload, check workload is known."},
-					},
-				)
-			}
-			// Need a final rule to accept traffic that is from a workload and going somewhere else.
-			// Otherwise, if ipfw has a DROP policy on the forward chain, the packet will get dropped.
-			// This rule must come after the to-workload jump rules above to ensure that we don't accept too
-			// early before the destination is checked.
-			for _, prefix := range rulesConfig.WorkloadIfacePrefixes {
-				// Make sure ipfw rules don't drop packets that we're about to process through BPF.
-				fwdRules = append(fwdRules,
-					ipfw.Rule{
-						Match:   ipfw.Match().InInterface(prefix + "+"),
-						Action:  ipfw.AcceptAction{},
-						Comment: []string{"To workload, mark has already been verified."},
-					},
-				)
-			}
-			fwdRules = append(fwdRules,
-				ipfw.Rule{
-					Match:   ipfw.Match().InInterface(bpfOutDev),
-					Action:  ipfw.AcceptAction{},
-					Comment: []string{"From ", bpfOutDev, " device, mark verified, accept."},
-				},
-			)
-		}
-
-		t.InsertOrAppendRules("INPUT", inputRules)
-		t.InsertOrAppendRules("FORWARD", fwdRules)
-		t.InsertOrAppendRules("OUTPUT", outputRules)
-	}
-
-	for _, t := range d.ipfwNATTables {
-		t.UpdateChains(d.ruleRenderer.StaticNATPostroutingChains(t.IPVersion))
-		t.InsertOrAppendRules("POSTROUTING", []ipfw.Rule{{
-			Action: ipfw.JumpAction{Target: rules.ChainNATPostrouting},
-		}})
-	}
-
-	for _, t := range d.ipfwRawTables {
-		t.UpdateChains(d.ruleRenderer.StaticBPFModeRawChains(t.IPVersion,
-			d.config.Wireguard.EncryptHostTraffic, d.config.BPFHostConntrackBypass,
-		))
-		t.InsertOrAppendRules("PREROUTING", []ipfw.Rule{{
-			Action: ipfw.JumpAction{Target: rules.ChainRawPrerouting},
-		}})
-		t.InsertOrAppendRules("OUTPUT", []ipfw.Rule{{
-			Action: ipfw.JumpAction{Target: rules.ChainRawOutput},
-		}})
-	}
-
-	if d.config.BPFExtToServiceConnmark != 0 {
-		mark := uint32(d.config.BPFExtToServiceConnmark)
-		for _, t := range d.ipfwMangleTables {
-			t.InsertOrAppendRules("PREROUTING", []ipfw.Rule{{
-				Match: ipfw.Match().MarkMatchesWithMask(
-					tcdefs.MarkSeen|mark,
-					tcdefs.MarkSeenMask|mark,
-				),
-				Comment: []string{"Mark connections with ExtToServiceConnmark"},
-				Action:  ipfw.SetConnMarkAction{Mark: mark, Mask: mark},
-			}})
-		}
-	}
-}
-
-// setUpIpfwBPFEarly that need to be written asap
-func (d *InternalDataplane) setUpIpfwBPFEarly() {
-	rules := bpfMarkPreestablishedFlowsRules()
-
-	for _, t := range d.ipfwFilterTables {
-		// We want to prevent inserting the rules over and over again if something later
-		// crashed. We do not expect that we would insert just a part of the batch as that
-		// should be handled by the ipfw-restore transaction.  Never the less if we
-		// see that unexpected case, perhaps due to an upgrade, we skip over updating the
-		// ipfw now and will wait for the full resync. That could be temporarily
-		// disrupting.
-		if present := t.CheckRulesPresent("FORWARD", rules); present != nil {
-			if len(present) != len(rules) {
-				log.WithField("presentRules", present).
-					Warn("Some early rules on filter FORWARD, skipping adding other, full resync will resolve it.")
-			}
-		} else {
-			if err := t.InsertRulesNow("FORWARD", rules); err != nil {
-				log.WithError(err).
-					Warn("Failed inserting some early rules to filter FORWARD, some flows may get temporarily disrupted.")
-			}
-		}
-		if present := t.CheckRulesPresent("OUTPUT", rules); present != nil {
-			if len(present) != len(rules) {
-				log.WithField("presentRules", present).
-					Warn("Some early rules on filter OUTPUT, skipping adding other, full resync will resolve it.")
-			}
-		} else {
-			if err := t.InsertRulesNow("OUTPUT", rules); err != nil {
-				log.WithError(err).
-					Warn("Failed inserting some early rules to filter OUTPUT, some flows may get temporarily disrupted.")
-			}
-		}
-	}
+	log.Info("IPIP disabled. Not starting tunnel update thread.")
 }
 
 func (d *InternalDataplane) setUpIpfwNormal() {
-	for _, t := range d.ipfwRawTables {
-		rawChains := d.ruleRenderer.StaticRawTableChains(t.IPVersion)
-		t.UpdateChains(rawChains)
-		t.InsertOrAppendRules("PREROUTING", []ipfw.Rule{{
-			Action: ipfw.JumpAction{Target: rules.ChainRawPrerouting},
-		}})
-		t.InsertOrAppendRules("OUTPUT", []ipfw.Rule{{
-			Action: ipfw.JumpAction{Target: rules.ChainRawOutput},
-		}})
-	}
-	for _, t := range d.ipfwFilterTables {
+	for _, t := range d.allIpfwRuleSet {
 		filterChains := d.ruleRenderer.StaticFilterTableChains(t.IPVersion)
 		t.UpdateChains(filterChains)
 		t.InsertOrAppendRules("FORWARD", []ipfw.Rule{{
-			Action: ipfw.JumpAction{Target: rules.ChainFilterForward},
+			Action: ipfw.CallAction{Target: rules.ChainFilterForward},
 		}})
 		t.InsertOrAppendRules("INPUT", []ipfw.Rule{{
-			Action: ipfw.JumpAction{Target: rules.ChainFilterInput},
+			Action: ipfw.CallAction{Target: rules.ChainFilterInput},
 		}})
 		t.InsertOrAppendRules("OUTPUT", []ipfw.Rule{{
-			Action: ipfw.JumpAction{Target: rules.ChainFilterOutput},
+			Action: ipfw.CallAction{Target: rules.ChainFilterOutput},
 		}})
 
 		// Include rules which should be appended to the filter table forward chain.
 		t.AppendRules("FORWARD", d.ruleRenderer.StaticFilterForwardAppendRules())
-	}
-	for _, t := range d.ipfwNATTables {
-		t.UpdateChains(d.ruleRenderer.StaticNATTableChains(t.IPVersion))
-		t.InsertOrAppendRules("PREROUTING", []ipfw.Rule{{
-			Action: ipfw.JumpAction{Target: rules.ChainNATPrerouting},
-		}})
-		// We must go last to avoid a conflict if both kube-proxy and Calico
-		// decide to MASQ the traffic.
-		//
-		// This is because kube-proxy uses a mark bit to trigger its MASQ and
-		// we need the mark bit to get cleared by kube-proxy's chain.  If we
-		// go first, our MASQ rule terminates further processing, and the
-		// mark bit remains set on the packet.
-		//
-		// Leaving the mark set on the packet is a problem when the packet
-		// gets encapped because the mark is copied to the outer encap packet.
-		// The outer packet then gets MASQed by kube-proxy's rule.  In turn,
-		// that MASQ triggers a checksum offload bug in the kernel resulting
-		// in corrupted packets.
-		//
-		// N.B. ChainFIPSnat does not do MASQ, but does not collide with k8s
-		// service, namely nodeports.
-		t.AppendRules("POSTROUTING", []ipfw.Rule{{
-			Action: ipfw.JumpAction{Target: rules.ChainNATPostrouting},
-		}})
-		t.InsertOrAppendRules("OUTPUT", []ipfw.Rule{{
-			Action: ipfw.JumpAction{Target: rules.ChainNATOutput},
-		}})
-	}
-	for _, t := range d.ipfwMangleTables {
-		t.UpdateChains(d.ruleRenderer.StaticMangleTableChains(t.IPVersion))
-		t.InsertOrAppendRules("PREROUTING", []ipfw.Rule{{
-			Action: ipfw.JumpAction{Target: rules.ChainManglePrerouting},
-		}})
-		t.InsertOrAppendRules("POSTROUTING", []ipfw.Rule{{
-			Action: ipfw.JumpAction{Target: rules.ChainManglePostrouting},
-		}})
-	}
-	if d.xdpState != nil {
-		if err := d.setXDPFailsafePorts(); err != nil {
-			log.Warnf("failed to set XDP failsafe ports, disabling XDP: %v", err)
-			if err := d.shutdownXDPCompletely(); err != nil {
-				log.Warnf("failed to disable XDP: %v, will proceed anyway.", err)
-			}
-		}
 	}
 }
 
@@ -1210,52 +878,6 @@ func stringToProtocol(protocol string) (labelindex.IpfwTablePortProtocol, error)
 	return labelindex.ProtocolNone, fmt.Errorf("unknown protocol %q", protocol)
 }
 
-func (d *InternalDataplane) setXDPFailsafePorts() error {
-	inboundPorts := d.config.RulesConfig.FailsafeInboundHostPorts
-
-	if _, err := d.xdpState.common.bpfLib.NewFailsafeMap(); err != nil {
-		return err
-	}
-
-	for _, p := range inboundPorts {
-		proto, err := stringToProtocol(p.Protocol)
-		if err != nil {
-			return err
-		}
-
-		if err := d.xdpState.common.bpfLib.UpdateFailsafeMap(uint8(proto), p.Port); err != nil {
-			return err
-		}
-	}
-
-	log.Infof("Set XDP failsafe ports: %+v", inboundPorts)
-	return nil
-}
-
-// shutdownXDPCompletely attempts to disable XDP state.  This could fail in cases where XDP isn't working properly.
-func (d *InternalDataplane) shutdownXDPCompletely() error {
-	if d.xdpState == nil {
-		return nil
-	}
-	if d.callbacks != nil {
-		d.xdpState.DepopulateCallbacks(d.callbacks)
-	}
-	// spend 1 second attempting to wipe XDP, in case of a hiccup.
-	maxTries := 10
-	waitInterval := 100 * time.Millisecond
-	var err error
-	for i := 0; i < maxTries; i++ {
-		err = d.xdpState.WipeXDP()
-		if err == nil {
-			d.xdpState = nil
-			return nil
-		}
-		log.WithError(err).WithField("try", i).Warn("failed to wipe the XDP state")
-		time.Sleep(waitInterval)
-	}
-	return fmt.Errorf("Failed to wipe the XDP state after %v tries over %v seconds: Error %v", maxTries, waitInterval, err)
-}
-
 func (d *InternalDataplane) loopUpdatingDataplane() {
 	log.Info("Started internal ipfw dataplane driver loop")
 	healthTicks := time.NewTicker(healthInterval).C
@@ -1267,10 +889,6 @@ func (d *InternalDataplane) loopUpdatingDataplane() {
 	// If configured, start tickers to refresh the IP sets and routing table entries.
 	ipfwTableRefreshC := newRefreshTicker("IP sets", d.config.IpfwTableRefreshInterval)
 	routeRefreshC := newRefreshTicker("routes", d.config.RouteRefreshInterval)
-	var xdpRefreshC <-chan time.Time
-	if d.xdpState != nil {
-		xdpRefreshC = newRefreshTicker("XDP state", d.config.XDPRefreshInterval)
-	}
 
 	// Implement a simple leaky bucket throttle to control how often we refresh the dataplane.
 	// This makes sure that we tend to favour processing updates from the datastore if we're
@@ -1284,10 +902,6 @@ func (d *InternalDataplane) loopUpdatingDataplane() {
 			d.onDatastoreMessage(msg)
 		case ifaceUpdate := <-d.ifaceUpdates:
 			d.onIfaceMonitorMessage(ifaceUpdate)
-		case name := <-d.vxlanParentC:
-			d.vxlanManager.OnParentNameUpdate(name)
-		case name := <-d.vxlanParentCV6:
-			d.vxlanManagerV6.OnParentNameUpdate(name)
 		case <-ipfwTableRefreshC:
 			log.Debug("Refreshing IP sets state")
 			d.forceIpfwTableRefresh = true
@@ -1295,10 +909,6 @@ func (d *InternalDataplane) loopUpdatingDataplane() {
 		case <-routeRefreshC:
 			log.Debug("Refreshing routes")
 			d.forceRouteRefresh = true
-			d.dataplaneNeedsSync = true
-		case <-xdpRefreshC:
-			log.Debug("Refreshing XDP")
-			d.forceXDPRefresh = true
 			d.dataplaneNeedsSync = true
 		case <-d.reschedC:
 			log.Debug("Reschedule kick received")
@@ -1463,9 +1073,6 @@ func (d *InternalDataplane) processIfaceStateUpdate(ifaceUpdate *ifaceStateUpdat
 		mgr.OnUpdate(ifaceUpdate)
 	}
 
-	for _, fdb := range d.vxlanFDBs {
-		fdb.OnIfaceStateChanged(ifaceUpdate.Name, ifaceUpdate.State)
-	}
 
 	for _, mgr := range d.managersWithRouteTables {
 		for _, routeTable := range mgr.GetRouteTableSyncers() {
@@ -1511,28 +1118,6 @@ func (d *InternalDataplane) configureKernel() {
 	if err != nil {
 		log.WithError(err).Error("Failed to set IPv4 forwarding sysctl")
 	}
-
-	if d.config.IPv6Enabled {
-		log.Info("Making sure IPv6 forwarding is enabled.")
-		err = writeProcSys("/proc/sys/net/ipv6/conf/all/forwarding", "1")
-		if err != nil {
-			log.WithError(err).Error("Failed to set IPv6 forwarding sysctl")
-		}
-	}
-
-	if d.config.BPFEnabled && d.config.BPFDisableUnprivileged {
-		log.Info("BPF enabled, disabling unprivileged BPF usage.")
-		err := writeProcSys("/proc/sys/kernel/unprivileged_bpf_disabled", "1")
-		if err != nil {
-			log.WithError(err).Error("Failed to set unprivileged_bpf_disabled sysctl")
-		}
-	}
-	if d.config.Wireguard.Enabled || d.config.Wireguard.EnabledV6 {
-		// wireguard module is available in linux kernel >= 5.6
-		mpwg := newModProbe(moduleWireguard, newRealCmd)
-		out, err = mpwg.Exec()
-		log.WithError(err).WithField("output", out).Infof("attempted to modprobe %s", moduleWireguard)
-	}
 }
 
 func (d *InternalDataplane) recordMsgStat(msg interface{}) {
@@ -1575,37 +1160,6 @@ func (d *InternalDataplane) apply() {
 		d.reportHealth()
 	}
 
-	if d.xdpState != nil {
-		if d.forceXDPRefresh {
-			// Refresh timer popped.
-			d.xdpState.QueueResync()
-			d.forceXDPRefresh = false
-		}
-
-		var applyXDPError error
-		d.xdpState.ProcessPendingDiffState(d.endpointsSourceV4)
-		if err := d.applyXDPActions(); err != nil {
-			applyXDPError = err
-		} else {
-			err := d.xdpState.ProcessMemberUpdates()
-			d.xdpState.DropPendingDiffState()
-			if err != nil {
-				log.WithError(err).Warning("Failed to process XDP member updates, will resync later...")
-				if err := d.applyXDPActions(); err != nil {
-					applyXDPError = err
-				}
-			}
-			d.xdpState.UpdateState()
-		}
-		if applyXDPError != nil {
-			log.WithError(applyXDPError).Info("Applying XDP actions did not succeed, disabling XDP")
-			if err := d.shutdownXDPCompletely(); err != nil {
-				log.Warnf("failed to disable XDP: %v, will proceed anyway.", err)
-			}
-		}
-	}
-	d.reportHealth()
-
 	if d.forceRouteRefresh {
 		// Refresh timer popped.
 		for _, r := range d.routeTableSyncers() {
@@ -1615,9 +1169,6 @@ func (d *InternalDataplane) apply() {
 		for _, r := range d.routeRules() {
 			// Queue a resync on the next Apply().
 			r.QueueResync()
-		}
-		for _, fdb := range d.vxlanFDBs {
-			fdb.QueueResync()
 		}
 		d.forceRouteRefresh = false
 	}
@@ -1641,20 +1192,6 @@ func (d *InternalDataplane) apply() {
 			d.reportHealth()
 			ipfwTableWG.Done()
 		}(ipfwTable)
-	}
-
-	// Update any VXLAN FDB entries.
-	for _, fdb := range d.vxlanFDBs {
-		err := fdb.Apply()
-		if err != nil {
-			var lnf netlink.LinkNotFoundError
-			if errors.As(err, &lnf) || errors.Is(err, vxlanfdb.ErrLinkDown) {
-				log.Debug("VXLAN interface not ready yet, can't sync FDB entries.")
-			} else {
-				log.WithError(err).Warn("Failed to synchronize VXLAN FDB entries, will retry...")
-				d.dataplaneNeedsSync = true
-			}
-		}
 	}
 
 	// Update the routing table in parallel with the other updates.  We'll wait for it to finish
@@ -1696,9 +1233,9 @@ func (d *InternalDataplane) apply() {
 	var reschedDelayMutex sync.Mutex
 	var reschedDelay time.Duration
 	var ipfwWG sync.WaitGroup
-	for _, t := range d.allIpfwTables {
+	for _, t := range d.ipfwTable {
 		ipfwWG.Add(1)
-		go func(t *ipfw.Table) {
+		go func(t *ipfw.RuleSet) {
 			tableReschedAfter := t.Apply()
 
 			reschedDelayMutex.Lock()
@@ -1765,22 +1302,6 @@ func (d *InternalDataplane) apply() {
 		}
 		d.reschedC = d.reschedTimer.C
 	}
-}
-
-func (d *InternalDataplane) applyXDPActions() error {
-	var err error = nil
-	for i := 0; i < 10; i++ {
-		err = d.xdpState.ResyncIfNeeded(d.ipfwtableSourceV4)
-		if err != nil {
-			return err
-		}
-		if err = d.xdpState.ApplyBPFActions(d.ipfwtableSourceV4); err == nil {
-			return nil
-		} else {
-			log.WithError(err).Info("Applying XDP BPF actions did not succeed, will retry with resync...")
-		}
-	}
-	return err
 }
 
 func (d *InternalDataplane) loopReportingStatus() {

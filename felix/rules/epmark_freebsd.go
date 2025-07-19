@@ -45,7 +45,7 @@ type DefaultEPTagManager struct {
 func NewEndpointTagMapper(nonCaliTag uint16) EndpointTagMapper {
 	tagNumManager := tagnum.NewTagNumManager("endpoint-ipfw-tag")
 
-	if err := tagNumManager.SetUsedNum(tag); err != nil {
+	if err := tagNumManager.SetUsedNum(nonCaliTag); err != nil {
 		return nil
 	}
 

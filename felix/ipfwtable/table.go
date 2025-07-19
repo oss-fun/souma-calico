@@ -152,6 +152,20 @@ func (s *IpfwTable) AddOrReplaceIpfwTable(setMetadata IpfwTableMetadata, members
 	s.updateDirtiness(mainIpfwTableName)
 }
 
+func (s *IpfwTable) RemoveIpfwTable(setID string) {
+	setName := s.nameForMainIpfwTable(setID)
+	delete(s.setNameToAllMetadata, setName)
+	s.setNameToProgrammedMetadata.Desired().Delete(setName)
+	if _, ok := s.setNameToProgrammedMetadata.Dataplane().Get(setName); ok {
+		s.logCxt.WithField("setID", setID).Info("Queueing IP set for removal")
+		s.mainSetNameToMembers[setName].Desired().DeleteAll()
+	} else {
+		log.Debug("IP set to remove not in the dataplane.")
+		delete(s.mainSetNameToMembers, setName)
+	}
+	s.updateDirtiness(setName)
+}
+
 func (s *IpfwTable) nameForMainIpfwTable(setID string) string {
 	return s.IPVersionConfig.NameForMainIpfwTable(setID)
 }
@@ -184,12 +198,66 @@ func (s *IpfwTable) getOrCreateMemberTracker(mainIpfwTableName string) *deltatra
 	return dt
 }
 
+func (s *IpfwTable) RemoveMembers(setID string, removedMembers []string) {
+	setName := s.nameForMainIpfwTable(setID)
+	setMeta, ok := s.setNameToAllMetadata[setName]
+	if !ok {
+		log.WithField("setName", setName).Panic("RemoveMembers called for nonexistent IP set.")
+	}
+	canonMembers := s.filterAndCanonicaliseMembers(setMeta.Type, removedMembers)
+	if canonMembers.Len() == 0 {
+		s.logCxt.Debug("After filtering, found no members to remove")
+		return
+	}
+	membersTracker := s.mainSetNameToMembers[setName]
+	canonMembers.Iter(func(member IpfwTableMember) error {
+		membersTracker.Desired().Delete(member)
+		return nil
+	})
+	s.updateDirtiness(setName)
+}
+
+func (s *IpfwTable) QueueResync() {
+}
+
+func (s *IpfwTable) GetIPFamily() IPFamily {
+	return s.IPVersionConfig.Family
+}
+
+func (s *IpfwTable) GetTypeOf(setID string) (IpfwTableType, error) {
+	setName := s.nameForMainIpfwTable(setID)
+	setMeta, ok := s.setNameToAllMetadata[setName]
+	if !ok {
+		return "", fmt.Errorf("ipset %s not found", setID)
+	}
+	return setMeta.Type, nil
+}
+
 func (s *IpfwTable) filterAndCanonicaliseMembers(ipfwTableType IpfwTableType, members []string) set.Set[IpfwTableMember] {
 	filtered := set.New[IpfwTableMember]()
 	for _, member := range members {
 		filtered.Add(ipfwTableType.CanonicaliseMember(member))
 	}
 	return filtered
+}
+
+func (s *IpfwTable) GetDesiredMembers(setID string) (set.Set[string], error) {
+	setName := s.nameForMainIpfwTable(setID)
+
+	_, ok := s.setNameToAllMetadata[setName]
+	if !ok {
+		return nil, fmt.Errorf("ipset %s not found", setID)
+	}
+
+	memberTracker, ok := s.mainSetNameToMembers[setName]
+	if !ok {
+		return nil, fmt.Errorf("ipset %s not found in members tracker", setID)
+	}
+	strs := set.New[string]()
+	memberTracker.Desired().Iter(func(k IpfwTableMember) {
+		strs.Add(k.String())
+	})
+	return strs, nil
 }
 
 func (s *IpfwTable) ApplyUpdates() {
