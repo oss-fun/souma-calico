@@ -33,9 +33,9 @@ type policyManager struct {
 	ruleRenderer     policyRenderer
 	ipVersion        uint8
 	rawEgressOnly    bool
-	ipSetFilterDirty bool // Only used in "raw only" mode.
-	neededIPSets     map[proto.PolicyID]set.Set[string]
-	ipSetsCallback   func(neededIPSets set.Set[string])
+	ipfwTableFilterDirty bool // Only used in "raw only" mode.
+	neededIpfwTable     map[proto.PolicyID]set.Set[string]
+	ipfwTableCallback   func(neededIpfwTable set.Set[string])
 }
 
 type policyRenderer interface {
@@ -52,18 +52,16 @@ func newPolicyManager(ruleset IpfwRuleSet, ruleRenderer policyRenderer, ipVersio
 }
 
 func newRawEgressPolicyManager(rawTable IpfwRuleSet, ruleRenderer policyRenderer, ipVersion uint8,
-	ipSetsCallback func(neededIPSets set.Set[string])) *policyManager {
+	ipfwTableCallback func(neededIpfwTable set.Set[string])) *policyManager {
 	return &policyManager{
-		rawTable:      rawTable,
-		mangleTable:   ipfw.NewNoopTable(),
-		filterTable:   ipfw.NewNoopTable(),
+		ruleset:   ipfw.NewNoopRuleSet(),
 		ruleRenderer:  ruleRenderer,
 		ipVersion:     ipVersion,
 		rawEgressOnly: true,
 		// Make sure we set the filter at start-of-day, even if there are no policies.
-		ipSetFilterDirty: true,
-		neededIPSets:     make(map[proto.PolicyID]set.Set[string]),
-		ipSetsCallback:   ipSetsCallback,
+		ipfwTableFilterDirty: true,
+		neededIpfwTable:     make(map[proto.PolicyID]set.Set[string]),
+		ipfwTableCallback:   ipfwTableCallback,
 	}
 }
 
@@ -78,23 +76,21 @@ func (m *policyManager) OnUpdate(msg interface{}) {
 		log.WithField("id", msg.Id).Debug("Updating policy chains")
 		chains := m.ruleRenderer.PolicyToIpfwChains(msg.Id, msg.Policy, m.ipVersion)
 		if m.rawEgressOnly {
-			neededIPSets := set.New[string]()
+			neededIpfwTable := set.New[string]()
 			filteredChains := []*ipfw.Chain(nil)
 			for _, chain := range chains {
 				if strings.Contains(chain.Name, string(rules.PolicyOutboundPfx)) {
 					filteredChains = append(filteredChains, chain)
-					neededIPSets.AddAll(chain.IPSetNames())
+					neededIpfwTable.AddAll(chain.IpfwTableNames())
 				}
 			}
 			chains = filteredChains
-			m.updateNeededIPSets(msg.Id, neededIPSets)
+			m.updateNeededIpfwTable(msg.Id, neededIpfwTable)
 		}
 		// We can't easily tell whether the policy is in use in a particular table, and, if the policy
 		// type gets changed it may move between tables.  Hence, we put the policy into all tables.
 		// The ipfw layer will avoid programming it if it is not actually used.
-		m.rawTable.UpdateChains(chains)
-		m.mangleTable.UpdateChains(chains)
-		m.filterTable.UpdateChains(chains)
+		m.ruleset.UpdateChains(chains)
 	case *proto.ActivePolicyRemove:
 		log.WithField("id", msg.Id).Debug("Removing policy chains")
 		m.cleanUpPolicy(msg.Id)
@@ -105,58 +101,52 @@ func (m *policyManager) OnUpdate(msg interface{}) {
 		}
 		log.WithField("id", msg.Id).Debug("Updating profile chains")
 		inbound, outbound := m.ruleRenderer.ProfileToIpfwChains(msg.Id, msg.Profile, m.ipVersion)
-		m.filterTable.UpdateChains([]*ipfw.Chain{inbound, outbound})
-		m.mangleTable.UpdateChains([]*ipfw.Chain{outbound})
+		m.ruleset.UpdateChains([]*ipfw.Chain{inbound, outbound})
 	case *proto.ActiveProfileRemove:
 		log.WithField("id", msg.Id).Debug("Removing profile chains")
 		inName := rules.ProfileChainName(rules.ProfileInboundPfx, msg.Id)
 		outName := rules.ProfileChainName(rules.ProfileOutboundPfx, msg.Id)
-		m.filterTable.RemoveChainByName(inName)
-		m.filterTable.RemoveChainByName(outName)
-		m.mangleTable.RemoveChainByName(outName)
+		m.ruleset.RemoveChainByName(inName)
+		m.ruleset.RemoveChainByName(outName)
 	}
 }
 
 func (m *policyManager) cleanUpPolicy(id *proto.PolicyID) {
 	if m.rawEgressOnly {
-		m.updateNeededIPSets(id, nil)
+		m.updateNeededIpfwTable(id, nil)
 	}
 	inName := rules.PolicyChainName(rules.PolicyInboundPfx, id)
 	outName := rules.PolicyChainName(rules.PolicyOutboundPfx, id)
 	// As above, we need to clean up in all the tables.
-	m.filterTable.RemoveChainByName(inName)
-	m.filterTable.RemoveChainByName(outName)
-	m.mangleTable.RemoveChainByName(inName)
-	m.mangleTable.RemoveChainByName(outName)
-	m.rawTable.RemoveChainByName(inName)
-	m.rawTable.RemoveChainByName(outName)
+	m.ruleset.RemoveChainByName(inName)
+	m.ruleset.RemoveChainByName(outName)
 }
 
-func (m *policyManager) updateNeededIPSets(id *proto.PolicyID, neededIPSets set.Set[string]) {
-	if neededIPSets != nil {
-		m.neededIPSets[*id] = neededIPSets
+func (m *policyManager) updateNeededIpfwTable(id *proto.PolicyID, neededIpfwTable set.Set[string]) {
+	if neededIpfwTable != nil {
+		m.neededIpfwTable[*id] = neededIpfwTable
 	} else {
-		delete(m.neededIPSets, *id)
+		delete(m.neededIpfwTable, *id)
 	}
-	m.ipSetFilterDirty = true
+	m.ipfwTableFilterDirty = true
 }
 
 func (m *policyManager) CompleteDeferredWork() error {
 	if !m.rawEgressOnly {
 		return nil
 	}
-	if !m.ipSetFilterDirty {
+	if !m.ipfwTableFilterDirty {
 		return nil
 	}
-	m.ipSetFilterDirty = false
+	m.ipfwTableFilterDirty = false
 
 	merged := set.New[string]()
-	for _, ipSets := range m.neededIPSets {
-		ipSets.Iter(func(item string) error {
+	for _, ipfwTable := range m.neededIpfwTable {
+		ipfwTable.Iter(func(item string) error {
 			merged.Add(item)
 			return nil
 		})
 	}
-	m.ipSetsCallback(merged)
+	m.ipfwTableCallback(merged)
 	return nil
 }

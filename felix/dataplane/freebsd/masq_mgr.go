@@ -19,13 +19,14 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
+	"github.com/projectcalico/calico/felix/ipfwtable"
 	"github.com/projectcalico/calico/felix/dataplane/common"
 	"github.com/projectcalico/calico/felix/proto"
 	"github.com/projectcalico/calico/felix/rules"
 	"github.com/projectcalico/calico/libcalico-go/lib/set"
 )
 
-// masqManager manages the ipsets and iptables chains used to implement the "NAT outgoing" or
+// masqManager manages the ipfwtable and iptables chains used to implement the "NAT outgoing" or
 // "masquerade" feature.  The feature adds a boolean flag to each IPAM pool, which controls how
 // outgoing traffic to non-Calico destinations is handled.  If the "masquerade" flag is set,
 // outgoing traffic is source-NATted to appear to come from the host's IP address.
@@ -38,7 +39,7 @@ import (
 // pool is excluded.
 type masqManager struct {
 	ipVersion       uint8
-	ipsetsDataplane common.IpfwTableDataplane
+	ipfwTableDataplane common.IpfwTableDataplane
 	natTable        IpfwRuleSet
 	activePools     map[string]*proto.IPAMPool
 	masqPools       set.Set[string]
@@ -52,21 +53,21 @@ func newMasqManager(
 	ipfwTableDataplane common.IpfwTableDataplane,
 	natTable IpfwRuleSet,
 	ruleRenderer rules.RuleRenderer,
-	maxIPSetSize int,
+	maxIpfwTableSize int,
 	ipVersion uint8,
 ) *masqManager {
 	// Make sure our IP sets exist.  We set the contents to empty here
-	// but the IPSets object will defer writing the IP sets until we're
+	// but the IpfwTable object will defer writing the IP sets until we're
 	// in sync, by which point we'll have added all our CIDRs into the sets.
-	ipsetsDataplane.AddOrReplaceIPSet(ipsets.IPSetMetadata{
-		MaxSize: maxIPSetSize,
+	ipfwTableDataplane.AddOrReplaceIpfwTable(ipfwtable.IpfwTableMetadata{
+		MaxSize: maxIpfwTableSize,
 		SetID:   rules.IpfwTableIDNATOutgoingAllPools,
-		Type:    ipfwtable.IpfwTableTypeHashNet,
+		Type:    ipfwtable.IpfwTableTypeNet,
 	}, []string{})
-	ipsetsDataplane.AddOrReplaceIPSet(ipsets.IPSetMetadata{
-		MaxSize: maxIPSetSize,
+	ipfwTableDataplane.AddOrReplaceIpfwTable(ipfwtable.IpfwTableMetadata{
+		MaxSize: maxIpfwTableSize,
 		SetID:   rules.IpfwTableIDNATOutgoingMasqPools,
-		Type:    ipfwtable.IpfwTableTypeHashNet,
+		Type:    ipfwtable.IpfwTableTypeNet,
 	}, []string{})
 
 	return &masqManager{
@@ -100,14 +101,14 @@ func (d *masqManager) OnUpdate(msg interface{}) {
 	logCxt := d.logCxt.WithField("id", poolID)
 	if oldPool := d.activePools[poolID]; oldPool != nil {
 		// For simplicity (in case of an update to the CIDR, say) always
-		// remove the old values from the IP sets.  The IPSets object
+		// remove the old values from the IP sets.  The IpfwTable object
 		// defers and coalesces the update so removing then adding the
 		// same IP is a no-op anyway.
 		logCxt.Debug("Removing old pool.")
-		d.ipsetsDataplane.RemoveMembers(rules.IPSetIDNATOutgoingAllPools, []string{oldPool.Cidr})
+		d.ipfwTableDataplane.RemoveMembers(rules.IpfwTableIDNATOutgoingAllPools, []string{oldPool.Cidr})
 		if oldPool.Masquerade {
 			logCxt.Debug("Masquerade was enabled on pool.")
-			d.ipsetsDataplane.RemoveMembers(rules.IPSetIDNATOutgoingMasqPools, []string{oldPool.Cidr})
+			d.ipfwTableDataplane.RemoveMembers(rules.IpfwTableIDNATOutgoingMasqPools, []string{oldPool.Cidr})
 		}
 		delete(d.activePools, poolID)
 		d.masqPools.Discard(poolID)
@@ -123,10 +124,10 @@ func (d *masqManager) OnUpdate(msg interface{}) {
 
 		// Update the IP sets.
 		logCxt.Debug("Adding IPAM pool to IP sets.")
-		d.ipsetsDataplane.AddMembers(rules.IPSetIDNATOutgoingAllPools, []string{newPool.Cidr})
+		d.ipfwTableDataplane.AddMembers(rules.IpfwTableIDNATOutgoingAllPools, []string{newPool.Cidr})
 		if newPool.Masquerade {
 			logCxt.Debug("IPAM has masquerade enabled.")
-			d.ipsetsDataplane.AddMembers(rules.IPSetIDNATOutgoingMasqPools, []string{newPool.Cidr})
+			d.ipfwTableDataplane.AddMembers(rules.IpfwTableIDNATOutgoingMasqPools, []string{newPool.Cidr})
 			d.masqPools.Add(poolID)
 		}
 		d.activePools[poolID] = newPool

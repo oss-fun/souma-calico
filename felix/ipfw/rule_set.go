@@ -740,3 +740,21 @@ func numEmptyStrings(strs []string) int {
 	}
 	return count
 }
+
+// NoopTable fulfils the Table interface but does nothing.
+type NoopRuleSet struct{}
+
+func NewNoopRuleSet() *NoopRuleSet {
+        return new(NoopRuleSet)
+}
+
+func (t *NoopRuleSet) Name() string                                       { return "" }
+func (t *NoopRuleSet) IPVersion() uint8                                   { return 0 }
+func (t *NoopRuleSet) InsertOrAppendRules(chainName string, rules []Rule) {}
+func (t *NoopRuleSet) AppendRules(chainName string, rules []Rule)         {}
+func (t *NoopRuleSet) UpdateChain(chain *Chain)                           {}
+func (t *NoopRuleSet) UpdateChains([]*Chain)                              {}
+func (t *NoopRuleSet) RemoveChains([]*Chain)                              {}
+func (t *NoopRuleSet) RemoveChainByName(name string)                      {}
+func (t *NoopRuleSet) InvalidateDataplaneCache(reason string)             {}
+func (t *NoopRuleSet) Apply() time.Duration                               { return 0 }

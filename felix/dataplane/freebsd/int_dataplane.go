@@ -17,16 +17,12 @@
 package intdataplane
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"net"
 	"os"
 	"reflect"
 	"regexp"
-	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -34,10 +30,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/oss-fun/netlink"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
-	"k8s.io/client-go/kubernetes"
-
-	apiv3 "github.com/projectcalico/api/pkg/apis/projectcalico/v3"
-	"github.com/projectcalico/api/pkg/lib/numorstring"
 
 	"github.com/projectcalico/calico/felix/config"
 	"github.com/projectcalico/calico/felix/dataplane/common"
@@ -55,8 +47,6 @@ import (
 	"github.com/projectcalico/calico/felix/routetable"
 	"github.com/projectcalico/calico/felix/rules"
 	"github.com/projectcalico/calico/felix/throttle"
-	"github.com/projectcalico/calico/felix/vxlanfdb"
-	"github.com/projectcalico/calico/felix/wireguard"
 	"github.com/projectcalico/calico/libcalico-go/lib/health"
 	lclogutils "github.com/projectcalico/calico/libcalico-go/lib/logutils"
 	cprometheus "github.com/projectcalico/calico/libcalico-go/lib/prometheus"
@@ -151,8 +141,6 @@ type Config struct {
 	XDPRefreshInterval           time.Duration
 
 	FloatingIPsEnabled bool
-
-	Wireguard wireguard.Config
 
 	NetlinkTimeout time.Duration
 
@@ -279,8 +267,6 @@ type InternalDataplane struct {
 
 	debugHangC <-chan time.Time
 
-	endpointsSourceV4 endpointsSource
-	ipfwTableSourceV4 ipfwTableSource
 	callbacks         *common.Callbacks
 
 	loopSummarizer *logutils.Summarizer
@@ -303,11 +289,6 @@ const (
 	wireguardV6MTUOverhead = 80
 	aksMTUOverhead         = 100
 )
-
-type ipfwTableSource struct {
-}
-type endpointsSource struct {
-}
 
 func NewIntDataplaneDriver(config Config) *InternalDataplane {
 	log.WithField("config", config).Info("Creating internal FreeBSD dataplane driver.")
@@ -395,7 +376,6 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 
 	dp.RegisterManager(ipfwTableManager)
 
-	dp.ipfwTableSourceV4 = ipfwTableManager
 	dp.RegisterManager(newHostIPManager(
 		config.RulesConfig.WorkloadIfacePrefixes,
 		rules.IpfwTableIDThisHostIPs,
@@ -435,7 +415,6 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 		config.FloatingIPsEnabled,
 	)
 	dp.RegisterManager(epManager)
-	dp.endpointsSourceV4 = epManager
 	dp.RegisterManager(newFloatingIPManager(allRulesetV4, ruleRenderer, 4, config.FloatingIPsEnabled))
 	dp.RegisterManager(newMasqManager(ipfwTableV4, allRulesetV4, ruleRenderer, config.MaxIpfwTableSize, 4))
 	
@@ -534,8 +513,6 @@ func determinePodMTU(config Config) int {
 		{config.IPIPMTU, config.RulesConfig.IPIPEnabled},
 		{config.VXLANMTU, config.RulesConfig.VXLANEnabled},
 		{config.VXLANMTUV6, config.RulesConfig.VXLANEnabledV6},
-		{config.Wireguard.MTU, config.Wireguard.Enabled},
-		{config.Wireguard.MTUV6, config.Wireguard.EnabledV6},
 	} {
 		if s.enabled && s.mtu != 0 && (s.mtu < mtu || mtu == 0) {
 			mtu = s.mtu
@@ -569,14 +546,6 @@ func ConfigureDefaultMTUs(hostMTU int, c *Config) {
 	if c.VXLANMTUV6 == 0 {
 		log.Debug("Defaulting IPv6 VXLAN MTU based on host")
 		c.VXLANMTUV6 = hostMTU - vxlanV6MTUOverhead
-	}
-	if c.Wireguard.MTU == 0 {
-		log.Debug("Defaulting IPv4 Wireguard MTU based on host")
-		c.Wireguard.MTU = hostMTU - wireguardMTUOverhead
-	}
-	if c.Wireguard.MTUV6 == 0 {
-		log.Debug("Defaulting IPv6 Wireguard MTU based on host")
-		c.Wireguard.MTUV6 = hostMTU - wireguardV6MTUOverhead
 	}
 }
 
@@ -1226,55 +1195,6 @@ func (d *InternalDataplane) apply() {
 		}(r)
 	}
 
-	// Wait for the IP sets update to finish.  We can't update ipfw until it has.
-	ipfwTableWG.Wait()
-
-	// Update ipfw, this should sever any references to now-unused IP sets.
-	var reschedDelayMutex sync.Mutex
-	var reschedDelay time.Duration
-	var ipfwWG sync.WaitGroup
-	for _, t := range d.ipfwTable {
-		ipfwWG.Add(1)
-		go func(t *ipfw.RuleSet) {
-			tableReschedAfter := t.Apply()
-
-			reschedDelayMutex.Lock()
-			defer reschedDelayMutex.Unlock()
-			if tableReschedAfter != 0 && (reschedDelay == 0 || tableReschedAfter < reschedDelay) {
-				reschedDelay = tableReschedAfter
-			}
-			d.reportHealth()
-			ipfwWG.Done()
-		}(t)
-	}
-	ipfwWG.Wait()
-
-	// Now clean up any left-over IP sets.
-	var ipfwTableNeedsReschedule atomic.Bool
-	for _, ipfwTable := range d.ipfwTable {
-		ipfwTableWG.Add(1)
-		go func(s common.IpfwTableDataplane) {
-			defer ipfwTableWG.Done()
-			reschedule := s.ApplyDeletions()
-			if reschedule {
-				ipfwTableNeedsReschedule.Store(true)
-			}
-			d.reportHealth()
-		}(ipfwTable)
-	}
-	ipfwTableWG.Wait()
-	if ipfwTableNeedsReschedule.Load() {
-		if reschedDelay == 0 || reschedDelay > 100*time.Millisecond {
-			reschedDelay = 100 * time.Millisecond
-		}
-	}
-
-	// Wait for the route updates to finish.
-	routesWG.Wait()
-
-	// Wait for the rule updates to finish.
-	rulesWG.Wait()
-
 	// And publish and status updates.
 	d.endpointStatusCombiner.Apply()
 
@@ -1289,18 +1209,6 @@ func (d *InternalDataplane) apply() {
 		}
 		// Nil out our copy of the channel to record that the timer is inactive.
 		d.reschedC = nil
-	}
-	if reschedDelay != 0 {
-		// We need to reschedule.
-		log.WithField("delay", reschedDelay).Debug("Asked to reschedule.")
-		if d.reschedTimer == nil {
-			// First time, create the timer.
-			d.reschedTimer = time.NewTimer(reschedDelay)
-		} else {
-			// Have an existing timer, reset it.
-			d.reschedTimer.Reset(reschedDelay)
-		}
-		d.reschedC = d.reschedTimer.C
 	}
 }
 

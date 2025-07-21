@@ -63,3 +63,12 @@ func (c *Chain) GetFinRuleNum() uint16 {
 	return c.Rules[len(c.Rules)-1].Number
 }
 
+func (c *Chain) IpfwTableNames() (ipfwTableNames []string) {
+	if c == nil {
+		return nil
+	}
+	for _, rule := range c.Rules {
+		ipfwTableNames = append(ipfwTableNames, rule.Match.TableNames()...)
+	}
+	return
+}

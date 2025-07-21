@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"regexp"
 
 	"github.com/projectcalico/calico/felix/proto"
 )
@@ -86,6 +87,19 @@ func (m MatchCriteria) DestTable(name string) MatchCriteria {
 
 func (m MatchCriteria) NotDestTable(name string) MatchCriteria {
 	return append(m, fmt.Sprintf("to not table(%s)", name))
+}
+
+func (m MatchCriteria) TableNames() (tableNames []string) {
+	re := regexp.MustCompile(`^table\(.*\)$`)
+	for _, matchString := range []string(m) {
+		words := strings.Split(matchString, " ")
+		for i := range words {
+			if re.MatchString(words[i]) {
+				tableNames = append(tableNames, words[i])
+			}
+		}
+	}
+	return
 }
 
 func (m MatchCriteria) InInterface(iface string) MatchCriteria {

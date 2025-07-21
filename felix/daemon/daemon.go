@@ -430,8 +430,7 @@ configRetry:
 		configParams.Copy(), // Copy to avoid concurrent access.
 		healthAggregator,
 		configChangedRestartCallback,
-		fatalErrorCallback,
-		k8sClientSet)
+		fatalErrorCallback)
 
 	// Defer reporting ready until we've started the dataplane driver.  This
 	// ensures that our overall readiness waits for the dataplane driver to
