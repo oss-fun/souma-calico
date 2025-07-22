@@ -1,3 +1,5 @@
+//go:build !freebsd
+
 // Copyright (c) 2016-2019 Tigera, Inc. All rights reserved.
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -125,7 +127,7 @@ Options:
      --log-dir=<LOG_DIR>   The directory containing Calico logs.
                            [default: /var/log/calico]
      --node-image=<DOCKER_IMAGE_NAME>
-                           Docker image to use for Calico's per-node container.
+                           DOCKER image to use for Calico's per-node container.
                            [default: quay.io/calico/node:latest]
      --backend=(bird|none)
                            Specify which networking backend to use.  When set
@@ -295,13 +297,13 @@ Description:
 		vols = append(vols, vol{hostPath: etcdcfg.EtcdCertFile, containerPath: ETCD_CERT_NODE_FILE})
 	}
 
-	// Create the Docker command to execute (or display).  Start with the
+	// Create the nerdctl command to execute (or display).  Start with the
 	// fixed parts.  If this is not for an init system, we'll include the
-	// detach flag (to prevent the command blocking), and use Dockers built
+	// detach flag (to prevent the command blocking), and use nerdctls built
 	// in restart mechanism.  If this is for an init-system we want the
-	// command to remain attached and for Docker to remove the dead
+	// command to remain attached and for nerdctl to remove the dead
 	// container so that it can be restarted by the init system.
-	cmd := []string{"docker", "run", "--net=host", "--privileged",
+	cmd := []string{"nerdctl", "run", "--net=host", "--privileged",
 		"--name=calico-node"}
 	if initSystem {
 		cmd = append(cmd, "--rm")
@@ -331,7 +333,7 @@ Description:
 			fmt.Println("to display the appropriate start and stop commands.")
 		} else {
 			fmt.Println("Use the following command to stop the calico/node container:")
-			fmt.Printf("\ndocker stop calico-node\n\n")
+			fmt.Printf("\nnerdctl stop calico-node\n\n")
 		}
 		return nil
 	}
@@ -356,17 +358,17 @@ Description:
 	// Make sure the calico-node is not already running before we attempt
 	// to start the node.
 	fmt.Println("Removing old calico-node container (if running).")
-	err = exec.Command("docker", "rm", "-f", "calico-node").Run()
+	err = exec.Command("nerdctl", "rm", "-f", "calico-node").Run()
 	if err != nil {
 		log.WithError(err).Debug("Unable to remove calico-node container (ok if container was not running)")
 	}
 
-	// Run the docker command.
+	// Run the nerdctl command.
 	fmt.Println("Running the following command to start calico-node:")
 	fmt.Printf("\n%s\n\n", strings.Join(cmd, " "))
 	fmt.Println("Image may take a short time to download if it is not available locally.")
 
-	// Now execute the actual Docker run command and check for the
+	// Now execute the actual nerdctl run command and check for the
 	// unable to find image message.
 	runCmd := exec.Command(cmd[0], cmd[1:]...)
 	if output, err := runCmd.CombinedOutput(); err != nil {
@@ -377,9 +379,9 @@ Description:
 		return fmt.Errorf(errStr)
 	}
 
-	// Create the command to follow the docker logs for the calico/node
+	// Create the command to follow the nerdctl logs for the calico/node
 	fmt.Print("Container started, checking progress logs.\n\n")
-	logCmd := exec.Command("docker", "logs", "--follow", "calico-node")
+	logCmd := exec.Command("nerdctl", "logs", "--follow", "calico-node")
 
 	// Get the stdout pipe
 	outPipe, err := logCmd.StdoutPipe()
@@ -394,7 +396,7 @@ Description:
 		return fmt.Errorf("Error executing command:  unable to check calico/node logs: %v", err)
 	}
 
-	// Protect against calico processes taking too long to start, or docker
+	// Protect against calico processes taking too long to start, or nerdctl
 	// logs hanging without output.
 	time.AfterFunc(checkLogTimeout, func() {
 		err = logCmd.Process.Kill()
@@ -423,7 +425,7 @@ Description:
 	// Wait for the logging process to terminate.  We expect an error here, because we
 	// just killed it.
 	err = logCmd.Wait()
-	log.WithError(err).Info("Expected error after killing docker logs command")
+	log.WithError(err).Info("Expected error after killing nerdctl logs command")
 
 	// If we didn't successfully start then notify the user.
 	if outScanner.Err() != nil {
