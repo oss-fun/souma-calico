@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Tigera, Inc. All rights reserved.
+// Copyright (c) 2018-2020 Tigera, Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,6 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ipamplugin
+package dataplane
 
-const ipamLockPath = "/var/run/calico/ipam.lock"
+import (
+	"github.com/sirupsen/logrus"
+
+	"github.com/projectcalico/calico/cni-plugin/pkg/dataplane/freebsd"
+	"github.com/projectcalico/calico/cni-plugin/pkg/types"
+)
+
+func getDefaultSystemDataplane(conf types.NetConf, logger *logrus.Entry) (Dataplane, error) {
+	return freebsd.NewFreeBSDDataplane(conf, logger), nil
+}

@@ -31,7 +31,7 @@ import (
 	cnitypes "github.com/containernetworking/cni/pkg/types"
 	cniv1 "github.com/containernetworking/cni/pkg/types/100"
 	cniSpecVersion "github.com/containernetworking/cni/pkg/version"
-	"github.com/containernetworking/plugins/pkg/ipam"
+	"github.com/oss-fun/plugins/pkg/ipam"
 	"github.com/mcuadros/go-version"
 	"github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
