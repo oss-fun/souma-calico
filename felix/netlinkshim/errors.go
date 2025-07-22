@@ -18,7 +18,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/vishvananda/netlink"
+	"github.com/oss-fun/netlink"
 )
 
 func IsNotSupported(err error) bool {

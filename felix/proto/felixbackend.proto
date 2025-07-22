@@ -1,13 +1,13 @@
 syntax = "proto3";
 package felix;
-option go_package = "proto";
+option go_package = "./;proto";
 
 service PolicySync {
   // On this API, only the following payloads will be sent:
   //  - InSync
-  //  - IPSetUpdate
-  //  - IPSetDeltaUpdate
-  //  - IPSetRemove
+  //  - IpfwTableUpdate
+  //  - IpfwTableDeltaUpdate
+  //  - IpfwTableRemove
   //  - ActiveProfileUpdate
   //  - ActiveProfileRemove
   //  - ActivePolicyUpdate
@@ -44,14 +44,14 @@ message ToDataplane {
     // resynchronise the dataplane.
     InSync in_sync = 1;
 
-    // IPSetUpdate is sent when an IP set becomes active.  It contains the
+    // IpfwTableUpdate is sent when an IP set becomes active.  It contains the
     // complete membership of the IP set.
-    IPSetUpdate ipset_update = 2;
-    // IPSetDeltaUpdates are sent after the first IPSetUpdate; they contain
+    IpfwTableUpdate ipfwTable_update = 2;
+    // IpfwTableDeltaUpdates are sent after the first IpfwTableUpdate; they contain
     // a list of IPs that should be added and removed from the IP set.
-    IPSetDeltaUpdate ipset_delta_update = 3;
-    // IPSet remove is sent when an IP set is no longer needed.
-    IPSetRemove ipset_remove = 4;
+    IpfwTableDeltaUpdate ipfwTable_delta_update = 3;
+    // IpfwTable remove is sent when an IP set is no longer needed.
+    IpfwTableRemove ipfwTable_remove = 4;
 
     // ActiveProfileUpdate is sent when a profile becomes active or is updated.
     ActiveProfileUpdate active_profile_update = 5;
@@ -184,24 +184,24 @@ message RawConfig {
 message InSync {
 }
 
-message IPSetUpdate {
+message IpfwTableUpdate {
   string id = 1;
   repeated string members = 2;
-  enum IPSetType {
+  enum IpfwTableType {
     IP = 0;           // Each member is an IP address in dotted-decimal or IPv6 format.
     IP_AND_PORT = 1;  // Each member is "<IP>,(tcp|udp):port".
     NET = 2;          // Each member is a CIDR in dotted-decimal or IPv6 format.
   }
-  IPSetType type = 3;
+  IpfwTableType type = 3;
 }
 
-message IPSetDeltaUpdate {
+message IpfwTableDeltaUpdate {
   string id = 1;
   repeated string added_members = 2;
   repeated string removed_members = 3;
 }
 
-message IPSetRemove {
+message IpfwTableRemove {
   string id = 1;
 }
 
@@ -268,11 +268,11 @@ message Rule {
   // by (IP, port) IP sets.  A packet matches this rule if it matches any numeric port range *or*
   // any listed named port IP set.
   repeated PortRange src_ports = 5;
-  repeated string src_named_port_ip_set_ids = 12;
+  repeated string src_named_port_ipfw_table_ids = 12;
 
   repeated string dst_net = 6;
   repeated PortRange dst_ports = 7;
-  repeated string dst_named_port_ip_set_ids = 13;
+  repeated string dst_named_port_ipfw_table_ids = 13;
   oneof icmp {
     // Distinguish between a match on type only and type+code.  We can't use
     // the fact that fields ar optional because Go can't distinguish 0 from
@@ -280,8 +280,8 @@ message Rule {
     int32 icmp_type = 8;
     IcmpTypeAndCode icmp_type_code = 9;
   }
-  repeated string src_ip_set_ids = 10;
-  repeated string dst_ip_set_ids = 11;
+  repeated string src_ipfw_table_ids = 10;
+  repeated string dst_ipfw_table_ids = 11;
 
   // IP sets on which we should match both IP and port.
   repeated string dst_ip_port_set_ids = 15;
@@ -296,10 +296,10 @@ message Rule {
     int32 not_icmp_type = 107;
     IcmpTypeAndCode not_icmp_type_code = 108;
   }
-  repeated string not_src_ip_set_ids = 109;
-  repeated string not_dst_ip_set_ids = 110;
-  repeated string not_src_named_port_ip_set_ids = 112;
-  repeated string not_dst_named_port_ip_set_ids = 113;
+  repeated string not_src_ipfw_table_ids = 109;
+  repeated string not_dst_ipfw_table_ids = 110;
+  repeated string not_src_named_port_ipfw_table_ids = 112;
+  repeated string not_dst_named_port_ipfw_table_ids = 113;
 
   // These fields pass through the original selectors from the v3 datamodel unmodified as required
   // for the policy sync API.

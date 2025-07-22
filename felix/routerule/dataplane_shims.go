@@ -17,7 +17,7 @@ package routerule
 import (
 	"time"
 
-	"github.com/vishvananda/netlink"
+	"github.com/oss-fun/netlink"
 )
 
 type HandleIface interface {

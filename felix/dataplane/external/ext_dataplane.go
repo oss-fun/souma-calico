@@ -14,6 +14,9 @@
 
 // extdataplane implements the connection to an external dataplane driver, connected via
 // a pair of pipes.
+
+//go:build !freebsd
+
 package extdataplane
 
 import (

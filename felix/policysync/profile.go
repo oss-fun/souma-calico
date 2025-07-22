@@ -29,11 +29,11 @@ func newProfileInfo(p *proto.Profile) *profileInfo {
 	return i
 }
 
-func (pi *profileInfo) referencesIPSet(id string) bool {
+func (pi *profileInfo) referencesIpfwTable(id string) bool {
 	return pi.refs[id]
 }
 
 func (pi *profileInfo) computeRefs() {
 	pi.refs = make(map[string]bool)
-	addIPSetsRuleList(pi.p, pi.refs)
+	addIpfwTableRuleList(pi.p, pi.refs)
 }

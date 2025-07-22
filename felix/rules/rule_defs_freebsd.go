@@ -1,0 +1,425 @@
+// Copyright (c) 2020-2023 Tigera, Inc. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package rules
+
+import (
+	"net"
+	"reflect"
+	"strings"
+
+	log "github.com/sirupsen/logrus"
+
+	"github.com/projectcalico/api/pkg/lib/numorstring"
+
+	"github.com/projectcalico/calico/felix/config"
+	"github.com/projectcalico/calico/felix/ipfwtable"
+	"github.com/projectcalico/calico/felix/ipfw"
+	"github.com/projectcalico/calico/felix/proto"
+)
+
+const (
+	// ChainNamePrefix is a prefix used for all our ipfw chain names.  We include a '-' at
+	// the end to reduce clashes with other apps.  Our OpenStack DHCP agent uses prefix
+	// 'calico-dhcp-', for example.
+	ChainNamePrefix = "cali-"
+	// IpfwTableNamePrefix: similarly for IP sets, we use the following prefix; the IP sets layer
+	// adds its own "-" so it isn't included here.
+	IpfwTableNamePrefix = ipfwtable.IpfwTableNamePrefix
+
+	ChainFilterInput   = ChainNamePrefix + "INPUT"
+	ChainFilterForward = ChainNamePrefix + "FORWARD"
+	ChainFilterOutput  = ChainNamePrefix + "OUTPUT"
+
+	ChainRawPrerouting         = ChainNamePrefix + "PREROUTING"
+	ChainRawOutput             = ChainNamePrefix + "OUTPUT"
+	ChainRawUntrackedFlows     = ChainNamePrefix + "untracked-flows"
+	ChainRawBPFUntrackedPolicy = ChainNamePrefix + "untracked-policy"
+
+	ChainFailsafeIn  = ChainNamePrefix + "failsafe-in"
+	ChainFailsafeOut = ChainNamePrefix + "failsafe-out"
+
+	ChainNATPrerouting  = ChainNamePrefix + "PREROUTING"
+	ChainNATPostrouting = ChainNamePrefix + "POSTROUTING"
+	ChainNATOutput      = ChainNamePrefix + "OUTPUT"
+	ChainNATOutgoing    = ChainNamePrefix + "nat-outgoing"
+
+	ChainManglePrerouting  = ChainNamePrefix + "PREROUTING"
+	ChainManglePostrouting = ChainNamePrefix + "POSTROUTING"
+
+	IpfwTableIDNATOutgoingAllPools  = "all-ipam-pools"
+	IpfwTableIDNATOutgoingMasqPools = "masq-ipam-pools"
+
+	IpfwTableIDAllHostNets        = "all-hosts-net"
+	IpfwTableDAllVXLANSourceNets = "all-vxlan-net"
+	IpfwTableIDThisHostIPs        = "this-host"
+
+	ChainFIPDnat = ChainNamePrefix + "fip-dnat"
+	ChainFIPSnat = ChainNamePrefix + "fip-snat"
+
+	ChainCIDRBlock = ChainNamePrefix + "cidr-block"
+
+	PolicyInboundPfx   PolicyChainNamePrefix  = ChainNamePrefix + "pi-"
+	PolicyOutboundPfx  PolicyChainNamePrefix  = ChainNamePrefix + "po-"
+	ProfileInboundPfx  ProfileChainNamePrefix = ChainNamePrefix + "pri-"
+	ProfileOutboundPfx ProfileChainNamePrefix = ChainNamePrefix + "pro-"
+
+	PolicyGroupInboundPrefix  string = ChainNamePrefix + "gi-"
+	PolicyGroupOutboundPrefix string = ChainNamePrefix + "go-"
+
+	ChainWorkloadToHost       = ChainNamePrefix + "wl-to-host"
+	ChainFromWorkloadDispatch = ChainNamePrefix + "from-wl-dispatch"
+	ChainToWorkloadDispatch   = ChainNamePrefix + "to-wl-dispatch"
+
+	ChainDispatchToHostEndpoint          = ChainNamePrefix + "to-host-endpoint"
+	ChainDispatchFromHostEndpoint        = ChainNamePrefix + "from-host-endpoint"
+	ChainDispatchToHostEndpointForward   = ChainNamePrefix + "to-hep-forward"
+	ChainDispatchFromHostEndPointForward = ChainNamePrefix + "from-hep-forward"
+	ChainDispatchSetEndPointTag          = ChainNamePrefix + "set-endpoint-tag"
+	ChainDispatchFromEndPointTag         = ChainNamePrefix + "from-endpoint-tag"
+
+	ChainForwardCheck        = ChainNamePrefix + "forward-check"
+	ChainForwardEndpointTag = ChainNamePrefix + "forward-endpoint-tag"
+
+	ChainSetWireguardIncomingMark = ChainNamePrefix + "wireguard-incoming-mark"
+
+	ChainRpfSkip = ChainNamePrefix + "rpf-skip"
+
+	WorkloadToEndpointPfx   = ChainNamePrefix + "tw-"
+	WorkloadPfxSpecialAllow = "ALLOW"
+	WorkloadFromEndpointPfx = ChainNamePrefix + "fw-"
+
+	SetEndPointTagPfx = ChainNamePrefix + "sm-"
+
+	HostToEndpointPfx          = ChainNamePrefix + "th-"
+	HostFromEndpointPfx        = ChainNamePrefix + "fh-"
+	HostToEndpointForwardPfx   = ChainNamePrefix + "thfw-"
+	HostFromEndpointForwardPfx = ChainNamePrefix + "fhfw-"
+
+	RPFChain = ChainNamePrefix + "rpf"
+
+	RuleHashPrefix = "cali:"
+
+	// HistoricNATRuleInsertRegex is a regex pattern to match to match
+	// special-case rules inserted by old versions of felix.  Specifically,
+	// Python felix used to insert a masquerade rule directly into the
+	// POSTROUTING chain.
+	//
+	// Note: this regex depends on the output format of ipfw-save so,
+	// where possible, it's best to match only on part of the rule that
+	// we're sure can't change (such as the ipfw-table name in the masquerade
+	// rule).
+	HistoricInsertedNATRuleRegex = `-A POSTROUTING .* felix-masq-ipam-pools .*|` +
+		`-A POSTROUTING -o tunl0 -m addrtype ! --src-type LOCAL --limit-iface-out -m addrtype --src-type LOCAL -j MASQUERADE`
+
+	KubeProxyInsertRuleRegex = `-j KUBE-[a-zA-Z0-9-]*SERVICES|-j KUBE-FORWARD`
+)
+
+type PolicyDirection string
+
+const (
+	PolicyDirectionInbound  PolicyDirection = "inbound"  // AKA ingress
+	PolicyDirectionOutbound PolicyDirection = "outbound" // AKA egress
+)
+
+// Typedefs to prevent accidentally passing the wrong prefix to the Policy/ProfileChainName()
+type (
+	PolicyChainNamePrefix  string
+	ProfileChainNamePrefix string
+)
+
+var (
+	// AllHistoricChainNamePrefixes lists all the prefixes that we've used for chains.  Keeping
+	// track of the old names lets us clean them up.
+	AllHistoricChainNamePrefixes = []string{
+		// Current.
+		"cali-",
+
+		// Early RCs of Felix 2.1 used "cali" as the prefix for some chains rather than
+		// "cali-".  This led to name clashes with the DHCP agent, which uses "calico-" as
+		// its prefix.  We need to explicitly list these exceptions.
+		"califw-",
+		"calitw-",
+		"califh-",
+		"calith-",
+		"calipi-",
+		"calipo-",
+
+		// Pre Felix v2.1.
+		"felix-",
+	}
+	// AllHistoricIpfwTableNamePrefixes, similarly contains all the prefixes we've ever used for IP
+	// sets.
+	AllHistoricIpfwTableNamePrefixes = []string{"felix-", "cali"}
+	// LegacyV4IpfwTableNames contains some extra IP set names that were used in older versions of
+	// Felix and don't fit our versioned pattern.
+	LegacyV4IpfwTableNames = []string{"felix-masq-ipam-pools", "felix-all-ipam-pools"}
+
+	// Rule previxes used by kube-proxy.  Note: we exclude the so-called utility chains KUBE-MARK-MASQ and co because
+	// they are jointly owned by kube-proxy and kubelet.
+	KubeProxyChainPrefixes = []string{
+		"KUBE-FORWARD",
+		"KUBE-SERVICES",
+		"KUBE-EXTERNAL-SERVICES",
+		"KUBE-NODEPORTS",
+		"KUBE-SVC-",
+		"KUBE-SEP-",
+		"KUBE-FW-",
+		"KUBE-XLB-",
+	}
+)
+
+type RuleRenderer interface {
+	StaticFilterTableChains(ipVersion uint8) []*ipfw.Chain
+	StaticNATTableChains(ipVersion uint8) []*ipfw.Chain
+	StaticNATPostroutingChains(ipVersion uint8) []*ipfw.Chain
+	StaticRawTableChains(ipVersion uint8) []*ipfw.Chain
+	StaticMangleTableChains(ipVersion uint8) []*ipfw.Chain
+	StaticFilterForwardAppendRules() []ipfw.Rule
+
+	WorkloadDispatchChains(map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint) []*ipfw.Chain
+	WorkloadEndpointToIpfwChains(ifaceName string, epTagMapper EndpointTagMapper, adminUp bool, ingressPolicies []*PolicyGroup, egressPolicies []*PolicyGroup, profileIDs []string) []*ipfw.Chain
+	PolicyGroupToIpfwChains(group *PolicyGroup) []*ipfw.Chain
+
+	WorkloadInterfaceAllowChains(endpoints map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint) []*ipfw.Chain
+
+	EndpointTagDispatchChains(
+		epTagMapper EndpointTagMapper,
+		wlEndpoints map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint,
+		hepEndpoints map[string]proto.HostEndpointID,
+	) []*ipfw.Chain
+
+	HostDispatchChains(map[string]proto.HostEndpointID, string, bool) []*ipfw.Chain
+	FromHostDispatchChains(map[string]proto.HostEndpointID, string) []*ipfw.Chain
+	ToHostDispatchChains(map[string]proto.HostEndpointID, string) []*ipfw.Chain
+	HostEndpointToFilterChains(
+		ifaceName string,
+		epTagMapper EndpointTagMapper,
+		ingressPolicies []*PolicyGroup,
+		egressPolicies []*PolicyGroup,
+		ingressForwardPolicies []*PolicyGroup,
+		egressForwardPolicies []*PolicyGroup,
+		profileIDs []string,
+	) []*ipfw.Chain
+	HostEndpointToMangleEgressChains(
+		ifaceName string,
+		egressPolicies []*PolicyGroup,
+		profileIDs []string,
+	) []*ipfw.Chain
+	HostEndpointToRawEgressChain(
+		ifaceName string,
+		egressPolicies []*PolicyGroup,
+	) *ipfw.Chain
+	HostEndpointToRawChains(
+		ifaceName string,
+		ingressPolicies []*PolicyGroup,
+		egressPolicies []*PolicyGroup,
+	) []*ipfw.Chain
+	HostEndpointToMangleIngressChains(
+		ifaceName string,
+		preDNATPolicies []*PolicyGroup,
+	) []*ipfw.Chain
+
+	PolicyToIpfwChains(policyID *proto.PolicyID, policy *proto.Policy, ipVersion uint8) []*ipfw.Chain
+	ProfileToIpfwChains(profileID *proto.ProfileID, policy *proto.Profile, ipVersion uint8) (inbound, outbound *ipfw.Chain)
+	ProtoRuleToIpfwRules(pRule *proto.Rule, ipVersion uint8) []ipfw.Rule
+
+	MakeNatOutgoingRule(protocol string, action ipfw.Action, ipVersion uint8) ipfw.Rule
+	NATOutgoingChain(active bool, ipVersion uint8) *ipfw.Chain
+
+	DNATsToIpfwChains(dnats map[string]string) []*ipfw.Chain
+	SNATsToIpfwChains(snats map[string]string) []*ipfw.Chain
+	BlockedCIDRsToIpfwChains(cidrs []string, ipVersion uint8) []*ipfw.Chain
+
+	IpfwFilterDenyAction() ipfw.Action
+}
+
+type DefaultRuleRenderer struct {
+	Config
+	inputAllowActions    []ipfw.Action
+	filterAllowAction    ipfw.Action
+	mangleAllowAction    ipfw.Action
+	blockCIDRAction      ipfw.Action
+	ipfwFilterDenyAction ipfw.Action
+}
+
+func (r *DefaultRuleRenderer) IpfwFilterDenyAction() ipfw.Action {
+	return r.ipfwFilterDenyAction
+}
+
+func (r *DefaultRuleRenderer) ipfwTableConfig(ipVersion uint8) *ipfwtable.IPVersionConfig {
+	if ipVersion == 4 {
+		return r.IpfwTableConfigV4
+	} else {
+		log.WithField("version", ipVersion).Panic("Unknown IP version")
+		return nil
+	}
+}
+
+type Config struct {
+	IpfwTableConfigV4 *ipfwtable.IPVersionConfig
+
+	WorkloadIfacePrefixes []string
+
+	IpfwTagAccept   uint16
+	IpfwTagPass     uint16
+	IpfwTagScratch0 uint16
+	IpfwTagScratch1 uint16
+	IpfwTagEndpoint uint16
+	// ipfwMarkNonCaliEndpoint is an endpoint mark which is reserved
+	// to mark non-calico (workload or host) endpoint.
+	IpfwTagNonCaliEndpoint uint16
+
+	OpenStackMetadataIP          net.IP
+	OpenStackMetadataPort        uint16
+	OpenStackSpecialCasesEnabled bool
+
+	VXLANEnabled   bool
+	VXLANEnabledV6 bool
+	VXLANPort      int
+	VXLANVNI       int
+
+	IPIPEnabled            bool
+	FelixConfigIPIPEnabled *bool
+	// IPIPTunnelAddress is an address chosen from an IPAM pool, used as a source address
+	// by the host when sending traffic to a workload over IPIP.
+	IPIPTunnelAddress net.IP
+	// Same for VXLAN.
+	VXLANTunnelAddress   net.IP
+	VXLANTunnelAddressV6 net.IP
+
+	AllowVXLANPacketsFromWorkloads bool
+	AllowIPIPPacketsFromWorkloads  bool
+
+	WireguardEnabled            bool
+	WireguardEnabledV6          bool
+	WireguardInterfaceName      string
+	WireguardInterfaceNameV6    string
+	WireguardipfwTag           uint16
+	WireguardListeningPort      int
+	WireguardListeningPortV6    int
+	WireguardEncryptHostTraffic bool
+	RouteSource                 string
+
+	IpfwLogPrefix         string
+	EndpointToHostAction      string
+	IpfwFilterAllowAction string
+	IpfwMangleAllowAction string
+	IpfwFilterDenyAction  string
+
+	FailsafeInboundHostPorts  []config.ProtoPort
+	FailsafeOutboundHostPorts []config.ProtoPort
+
+	DisableConntrackInvalid bool
+
+	NATPortRange                       numorstring.Port
+	IpfwNATOutgoingInterfaceFilter string
+
+	NATOutgoingAddress             net.IP
+	BPFEnabled                     bool
+	BPFForceTrackPacketsFromIfaces []string
+	ServiceLoopPrevention          string
+}
+
+var unusedBitsInBPFMode = map[string]bool{
+	"ipfwMarkPass":            true,
+	"ipfwMarkScratch1":        true,
+	"ipfwMarkEndpoint":        true,
+	"ipfwMarkNonCaliEndpoint": true,
+}
+
+func (c *Config) validate() {
+	// Scan for unset ipfw mark bits.  We use reflection so that we have a hope of catching
+	// newly-added fields.
+	myValue := reflect.ValueOf(c).Elem()
+	myType := myValue.Type()
+	found := 0
+	usedBits := uint32(0)
+	for i := 0; i < myValue.NumField(); i++ {
+		fieldName := myType.Field(i).Name
+		if strings.HasPrefix(fieldName, "ipfwMark") && fieldName != "ipfwMarkNonCaliEndpoint" {
+			if c.BPFEnabled && unusedBitsInBPFMode[fieldName] {
+				log.WithField("field", fieldName).Debug("Ignoring unused field in BPF mode.")
+				continue
+			}
+			bits := myValue.Field(i).Interface().(uint32)
+			if bits == 0 {
+				log.WithField("field", fieldName).Panic(
+					"ipfwMarkXXX field not set.")
+			}
+			if usedBits&bits > 0 {
+				log.WithField("field", fieldName).Panic(
+					"ipfwMarkXXX field overlapped with another's bits.")
+			}
+			usedBits |= bits
+			found++
+		}
+	}
+	if found == 0 {
+		// Check the reflection found something we were expecting.
+		log.Panic("Didn't find any ipfwMarkXXX fields.")
+	}
+}
+
+func NewRenderer(config Config) RuleRenderer {
+	log.WithField("config", config).Info("Creating rule renderer.")
+	config.validate()
+
+	// First, what should we do when packets are not accepted.
+	var ipfwFilterDenyAction ipfw.Action
+	log.Info("packets that are not passed by any policy or profile will be dropped.")
+	ipfwFilterDenyAction = ipfw.DenyAction{}
+
+	// Convert configured actions to rule slices.
+	// First, what should we do with packets that come from workloads to the host itself.
+	var inputAllowActions []ipfw.Action
+	switch config.EndpointToHostAction {
+	case "DROP":
+		log.Info("Workload to host packets will be dropped.")
+		inputAllowActions = []ipfw.Action{ipfw.DenyAction{}}
+	case "ACCEPT":
+		log.Info("Workload to host packets will be accepted.")
+		inputAllowActions = []ipfw.Action{ipfw.AllowAction{}}
+	default:
+		log.Info("Workload to host packets will be returned to INPUT chain.")
+		inputAllowActions = []ipfw.Action{ipfw.ReturnAction{}}
+	}
+
+	// What should we do with packets that are accepted in the forwarding chain
+	var filterAllowAction, mangleAllowAction ipfw.Action
+	log.Info("filter table allowed packets will be accepted immediately.")
+	filterAllowAction = ipfw.AllowAction{}
+
+	log.Info("mangle table allowed packets will be accepted immediately.")
+	mangleAllowAction = ipfw.AllowAction{}
+
+	// How should we block CIDRs for loop prevention?
+	var blockCIDRAction ipfw.Action
+	switch config.ServiceLoopPrevention {
+	case "Drop":
+		log.Info("Packets to unknown service IPs will be dropped")
+		blockCIDRAction = ipfw.DenyAction{}
+	default:
+		log.Info("Packets to unknown service IPs will be allowed to loop")
+	}
+
+	return &DefaultRuleRenderer{
+		Config:               config,
+		inputAllowActions:    inputAllowActions,
+		filterAllowAction:    filterAllowAction,
+		mangleAllowAction:    mangleAllowAction,
+		blockCIDRAction:      blockCIDRAction,
+		ipfwFilterDenyAction: ipfwFilterDenyAction,
+	}
+}

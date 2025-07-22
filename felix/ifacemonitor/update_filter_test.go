@@ -22,8 +22,8 @@ import (
 	"time"
 
 	. "github.com/onsi/gomega"
-	"github.com/vishvananda/netlink"
-	"github.com/vishvananda/netlink/nl"
+	"github.com/oss-fun/netlink"
+	"github.com/oss-fun/netlink/nl"
 	"golang.org/x/sys/unix"
 
 	"github.com/projectcalico/calico/felix/ifacemonitor"

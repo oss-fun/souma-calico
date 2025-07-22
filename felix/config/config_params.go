@@ -158,52 +158,14 @@ func newProvider(s string) (Provider, error) {
 type Config struct {
 	// Configuration parameters.
 	UseInternalDataplaneDriver bool          `config:"bool;true"`
-	DataplaneDriver            string        `config:"file(must-exist,executable);calico-iptables-plugin;non-zero,die-on-fail,skip-default-validation"`
+	DataplaneDriver            string        `config:"file(must-exist,executable);calico-ipfw-plugin;non-zero,die-on-fail,skip-default-validation"`
 	DataplaneWatchdogTimeout   time.Duration `config:"seconds;90"`
 
 	// Wireguard configuration
 	WireguardEnabled               bool          `config:"bool;false"`
 	WireguardEnabledV6             bool          `config:"bool;false"`
-	WireguardListeningPort         int           `config:"int;51820"`
-	WireguardListeningPortV6       int           `config:"int;51821"`
-	WireguardRoutingRulePriority   int           `config:"int;99"`
-	WireguardInterfaceName         string        `config:"iface-param;wireguard.cali;non-zero"`
-	WireguardInterfaceNameV6       string        `config:"iface-param;wg-v6.cali;non-zero"`
-	WireguardMTU                   int           `config:"int;0"`
-	WireguardMTUV6                 int           `config:"int;0"`
-	WireguardHostEncryptionEnabled bool          `config:"bool;false"`
-	WireguardPersistentKeepAlive   time.Duration `config:"seconds;0"`
 
 	BPFEnabled                         bool              `config:"bool;false"`
-	BPFDisableUnprivileged             bool              `config:"bool;true"`
-	BPFLogLevel                        string            `config:"oneof(off,info,debug);off;non-zero"`
-	BPFLogFilters                      map[string]string `config:"keyvaluelist;;"`
-	BPFCTLBLogFilter                   string            `config:"oneof(all);;"`
-	BPFDataIfacePattern                *regexp.Regexp    `config:"regexp;^((en|wl|ww|sl|ib)[Popsx].*|(eth|wlan|wwan|bond).*|tunl0$|vxlan.calico$|vxlan-v6.calico$|wireguard.cali$|wg-v6.cali$)"`
-	BPFL3IfacePattern                  *regexp.Regexp    `config:"regexp;"`
-	BPFConnectTimeLoadBalancingEnabled bool              `config:"bool;;"`
-	BPFConnectTimeLoadBalancing        string            `config:"oneof(TCP,Enabled,Disabled);TCP;non-zero"`
-	BPFHostNetworkedNATWithoutCTLB     string            `config:"oneof(Enabled,Disabled);Enabled;non-zero"`
-	BPFExternalServiceMode             string            `config:"oneof(tunnel,dsr);tunnel;non-zero"`
-	BPFDSROptoutCIDRs                  []string          `config:"cidr-list;;"`
-	BPFKubeProxyIptablesCleanupEnabled bool              `config:"bool;true"`
-	BPFKubeProxyMinSyncPeriod          time.Duration     `config:"seconds;1"`
-	BPFKubeProxyEndpointSlicesEnabled  bool              `config:"bool;true"`
-	BPFExtToServiceConnmark            int               `config:"int;0"`
-	BPFPSNATPorts                      numorstring.Port  `config:"portrange;20000:29999"`
-	BPFMapSizeNATFrontend              int               `config:"int;65536;non-zero"`
-	BPFMapSizeNATBackend               int               `config:"int;262144;non-zero"`
-	BPFMapSizeNATAffinity              int               `config:"int;65536;non-zero"`
-	BPFMapSizeRoute                    int               `config:"int;262144;non-zero"`
-	BPFMapSizeConntrack                int               `config:"int;512000;non-zero"`
-	BPFMapSizeIPSets                   int               `config:"int;1048576;non-zero"`
-	BPFMapSizeIfState                  int               `config:"int;1000;non-zero"`
-	BPFHostConntrackBypass             bool              `config:"bool;true"`
-	BPFEnforceRPF                      string            `config:"oneof(Disabled,Strict,Loose);Loose;non-zero"`
-	BPFPolicyDebugEnabled              bool              `config:"bool;true"`
-	BPFForceTrackPacketsFromIfaces     []string          `config:"iface-filter-slice;docker+"`
-	BPFDisableGROForIfaces             *regexp.Regexp    `config:"regexp;"`
-	BPFExcludeCIDRsFromNAT             []string          `config:"cidr-list;;"`
 
 	// DebugBPFCgroupV2 controls the cgroup v2 path that we apply the connect-time load balancer to.  Most distros
 	// are configured for cgroup v1, which prevents all but the root cgroup v2 from working so this is only useful
@@ -243,22 +205,22 @@ type Config struct {
 
 	Ipv6Support bool `config:"bool;true"`
 
-	IptablesBackend                    string            `config:"oneof(legacy,nft,auto);auto"`
+	IpfwBackend                    string            `config:"oneof(legacy,nft,auto);auto"`
 	RouteRefreshInterval               time.Duration     `config:"seconds;90"`
 	InterfaceRefreshInterval           time.Duration     `config:"seconds;90"`
 	DeviceRouteSourceAddress           net.IP            `config:"ipv4;"`
 	DeviceRouteSourceAddressIPv6       net.IP            `config:"ipv6;"`
 	DeviceRouteProtocol                int               `config:"int;3"`
 	RemoveExternalRoutes               bool              `config:"bool;true"`
-	IptablesRefreshInterval            time.Duration     `config:"seconds;180"`
-	IptablesPostWriteCheckIntervalSecs time.Duration     `config:"seconds;5"`
-	IptablesLockFilePath               string            `config:"file;/run/xtables.lock"`
-	IptablesLockTimeoutSecs            time.Duration     `config:"seconds;0"`
-	IptablesLockProbeIntervalMillis    time.Duration     `config:"millis;50"`
+	IpfwRefreshInterval            time.Duration     `config:"seconds;180"`
+	IpfwPostWriteCheckIntervalSecs time.Duration     `config:"seconds;5"`
+	IpfwLockFilePath               string            `config:"file;/run/xtables.lock"`
+	IpfwLockTimeoutSecs            time.Duration     `config:"seconds;0"`
+	IpfwLockProbeIntervalMillis    time.Duration     `config:"millis;50"`
 	FeatureDetectOverride              map[string]string `config:"keyvaluelist;;"`
 	FeatureGates                       map[string]string `config:"keyvaluelist;;"`
-	IpsetsRefreshInterval              time.Duration     `config:"seconds;10"`
-	MaxIpsetSize                       int               `config:"int;1048576;non-zero"`
+	IpfwTableRefreshInterval              time.Duration     `config:"seconds;10"`
+	MaxIpfwTableSize                       int               `config:"int;1048576;non-zero"`
 	XDPRefreshInterval                 time.Duration     `config:"seconds;90"`
 
 	PolicySyncPathPrefix string `config:"file;;"`
@@ -275,9 +237,9 @@ type Config struct {
 
 	ChainInsertMode             string `config:"oneof(insert,append);insert;non-zero,die-on-fail"`
 	DefaultEndpointToHostAction string `config:"oneof(DROP,RETURN,ACCEPT);DROP;non-zero,die-on-fail"`
-	IptablesFilterAllowAction   string `config:"oneof(ACCEPT,RETURN);ACCEPT;non-zero,die-on-fail"`
-	IptablesMangleAllowAction   string `config:"oneof(ACCEPT,RETURN);ACCEPT;non-zero,die-on-fail"`
-	IptablesFilterDenyAction    string `config:"oneof(DROP,REJECT);DROP;non-zero,die-on-fail"`
+	IpfwFilterAllowAction   string `config:"oneof(ACCEPT,RETURN);ACCEPT;non-zero,die-on-fail"`
+	IpfwMangleAllowAction   string `config:"oneof(ACCEPT,RETURN);ACCEPT;non-zero,die-on-fail"`
+	IpfwFilterDenyAction    string `config:"oneof(DROP,REJECT);DROP;non-zero,die-on-fail"`
 	LogPrefix                   string `config:"string;calico-packet"`
 
 	LogFilePath string `config:"file;/var/log/calico/felix.log;die-on-fail"`
@@ -339,7 +301,7 @@ type Config struct {
 	// [Default: ""]
 	EndpointStatusPathPrefix string `config:"file;;"`
 
-	IptablesMarkMask uint32 `config:"mark-bitmask;0xffff0000;non-zero,die-on-fail"`
+	IpfwMarkMask uint32 `config:"mark-bitmask;0xffff0000;non-zero,die-on-fail"`
 
 	DisableConntrackInvalidCheck bool `config:"bool;false"`
 
@@ -394,7 +356,7 @@ type Config struct {
 	RouteTableRanges  []idalloc.IndexRange `config:"route-table-ranges;;die-on-fail"`
 	RouteSyncDisabled bool                 `config:"bool;false"`
 
-	IptablesNATOutgoingInterfaceFilter string `config:"iface-param;"`
+	IpfwNATOutgoingInterfaceFilter string `config:"iface-param;"`
 
 	SidecarAccelerationEnabled bool `config:"bool;false"`
 	XDPEnabled                 bool `config:"bool;true"`

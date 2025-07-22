@@ -1,3 +1,5 @@
+//go:build !freebsd
+
 // Copyright (c) 2020-2021 Tigera, Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,7 +25,7 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
-	"github.com/vishvananda/netlink"
+	"github.com/oss-fun/netlink"
 	"golang.org/x/sys/unix"
 
 	"github.com/projectcalico/calico/felix/environment"

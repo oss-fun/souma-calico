@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Tigera, Inc. All rights reserved.
+// Copyright (c) 2020 Tigera, Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,25 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package wireguard_test
+//go:build !windows
 
-import (
-	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/gomega"
+package timeshim
 
-	"testing"
-
-	"github.com/onsi/ginkgo/reporters"
-
-	"github.com/projectcalico/calico/libcalico-go/lib/testutils"
-)
-
-func init() {
-	testutils.HookLogrusForGinkgo()
+// Time is our shim interface to the time package.
+type Interface interface {
+	interfaceCommon
+	KTimeNanos() int64
 }
 
-func TestRules(t *testing.T) {
-	RegisterFailHandler(Fail)
-	junitReporter := reporters.NewJUnitReporter("../report/wireguard_suite.xml")
-	RunSpecsWithDefaultAndCustomReporters(t, "Wireguard Suite", []Reporter{junitReporter})
+func (realTime) KTimeNanos() int64 {
+	return -1
 }

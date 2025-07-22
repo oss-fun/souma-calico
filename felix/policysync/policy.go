@@ -29,11 +29,11 @@ func newPolicyInfo(p *proto.Policy) *policyInfo {
 	return i
 }
 
-func (pi *policyInfo) referencesIPSet(id string) bool {
+func (pi *policyInfo) referencesIpfwTable(id string) bool {
 	return pi.refs[id]
 }
 
 func (pi *policyInfo) computeRefs() {
 	pi.refs = make(map[string]bool)
-	addIPSetsRuleList(pi.p, pi.refs)
+	addIpfwTableRuleList(pi.p, pi.refs)
 }

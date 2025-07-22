@@ -19,11 +19,15 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
-	"github.com/vishvananda/netlink"
-	"golang.org/x/sys/unix"
+	"github.com/oss-fun/netlink"
 
 	"github.com/projectcalico/calico/felix/environment"
 	"github.com/projectcalico/calico/felix/netlinkshim/handlemgr"
+)
+
+const (
+	UNIX_RT_TABLE_LOCAL = 0xff // FreeBSD not supported...
+	UNIX_RTN_LOCAL      = 0x2
 )
 
 type netlinkReal struct {
@@ -83,8 +87,8 @@ func (nl *netlinkReal) ListLocalRoutes(link netlink.Link, family int) ([]netlink
 	}
 	routeFilter := &netlink.Route{}
 	filterFlags := netlink.RT_FILTER_TABLE | netlink.RT_FILTER_TYPE
-	routeFilter.Table = unix.RT_TABLE_LOCAL
-	routeFilter.Type = unix.RTN_LOCAL
+	routeFilter.Table = UNIX_RT_TABLE_LOCAL
+	routeFilter.Type = UNIX_RTN_LOCAL
 	if link != nil {
 		filterFlags |= netlink.RT_FILTER_OIF
 		routeFilter.LinkIndex = link.Attrs().Index

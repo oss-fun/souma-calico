@@ -32,7 +32,7 @@ import (
 	"github.com/projectcalico/calico/libcalico-go/lib/backend/model"
 )
 
-type ServiceMatchCallback func(ipSetID string, member labelindex.IPSetMember)
+type ServiceMatchCallback func(ipfwTableID string, member labelindex.IpfwTableMember)
 
 type ServiceIndex struct {
 	// cache of all endpoint slices, indexed by service name and slice namespace/name.
@@ -40,8 +40,8 @@ type ServiceIndex struct {
 	endpointSlicesByService map[string]map[string]*discovery.EndpointSlice
 
 	// Track active services, indexed by corresponding IP set UID and contributing service.
-	activeIPSetsByID      map[string]*ipSetData
-	activeIPSetsByService map[string]map[string]*ipSetData
+	activeIpfwTableByID      map[string]*ipfwTableData
+	activeIpfwTableByService map[string]map[string]*ipfwTableData
 
 	// Callback functions
 	OnMemberAdded   ServiceMatchCallback
@@ -55,12 +55,12 @@ func NewServiceIndex() *ServiceIndex {
 	idx := ServiceIndex{
 		endpointSlices:          make(map[string]*discovery.EndpointSlice),
 		endpointSlicesByService: make(map[string]map[string]*discovery.EndpointSlice),
-		activeIPSetsByID:        make(map[string]*ipSetData),
-		activeIPSetsByService:   make(map[string]map[string]*ipSetData),
+		activeIpfwTableByID:        make(map[string]*ipfwTableData),
+		activeIpfwTableByService:   make(map[string]map[string]*ipfwTableData),
 
 		// Callback functions
-		OnMemberAdded:   func(ipSetID string, member labelindex.IPSetMember) {},
-		OnMemberRemoved: func(ipSetID string, member labelindex.IPSetMember) {},
+		OnMemberAdded:   func(ipfwTableID string, member labelindex.IpfwTableMember) {},
+		OnMemberRemoved: func(ipfwTableID string, member labelindex.IpfwTableMember) {},
 
 		OnAlive: func() {},
 	}
@@ -99,40 +99,40 @@ func (idx *ServiceIndex) UpdateEndpointSlice(es *discovery.EndpointSlice) {
 	logc := log.WithFields(log.Fields{"slice": k, "svc": svc})
 
 	cached := idx.endpointSlices[k]
-	if ipSets, ok := idx.activeIPSetsByService[svc]; ok {
+	if ipfwTable, ok := idx.activeIpfwTableByService[svc]; ok {
 		logc.Debug("EndpointSlice belongs to an active service")
 
 		// Service contributing these endpoints is active. We need to determine
 		// if any endpoints have changed, and if so send through membership updates.
-		for _, ipSet := range ipSets {
+		for _, ipfwTable := range ipfwTable {
 			idx.maybeReportLive()
-			newIPSetContribution := idx.membersFromEndpointSlice(es, ipSet.IncludePorts())
-			oldIPSetContributions := idx.membersFromEndpointSlice(cached, ipSet.IncludePorts())
+			newIpfwTableContribution := idx.membersFromEndpointSlice(es, ipfwTable.IncludePorts())
+			oldIpfwTableContributions := idx.membersFromEndpointSlice(cached, ipfwTable.IncludePorts())
 
-			logc.Debugf("EndpointSlice Update contributed members: %+v", newIPSetContribution)
-			for _, member := range newIPSetContribution {
+			logc.Debugf("EndpointSlice Update contributed members: %+v", newIpfwTableContribution)
+			for _, member := range newIpfwTableContribution {
 				// Incref all the new members.  If any of them go from 0 to 1 reference then we
 				// know that they're new.  We'll temporarily double-count members that were already
 				// present, then decref them below.
 				//
 				// This reference counting also allows us to tolerate duplicate members in the
 				// input data.
-				refCount := ipSet.memberToRefCount[member] + 1
+				refCount := ipfwTable.memberToRefCount[member] + 1
 				if refCount == 1 {
-					idx.OnMemberAdded(ipSet.ID, member)
+					idx.OnMemberAdded(ipfwTable.ID, member)
 				}
-				ipSet.memberToRefCount[member] = refCount
+				ipfwTable.memberToRefCount[member] = refCount
 			}
 
 			// Decref all the old members.  If they hit 0 references, then the member has been
 			// removed so we emit an event.
-			for _, oldMember := range oldIPSetContributions {
-				newRefCount := ipSet.memberToRefCount[oldMember] - 1
+			for _, oldMember := range oldIpfwTableContributions {
+				newRefCount := ipfwTable.memberToRefCount[oldMember] - 1
 				if newRefCount == 0 {
-					idx.OnMemberRemoved(ipSet.ID, oldMember)
-					delete(ipSet.memberToRefCount, oldMember)
+					idx.OnMemberRemoved(ipfwTable.ID, oldMember)
+					delete(ipfwTable.memberToRefCount, oldMember)
 				} else {
-					ipSet.memberToRefCount[oldMember] = newRefCount
+					ipfwTable.memberToRefCount[oldMember] = newRefCount
 				}
 			}
 		}
@@ -157,21 +157,21 @@ func (idx *ServiceIndex) DeleteEndpointSlice(key model.ResourceKey) {
 
 	// Determine the service that contributed this endpoint slice.
 	svc := serviceName(es)
-	if ipSets, ok := idx.activeIPSetsByService[svc]; ok {
-		for _, ipSet := range ipSets {
+	if ipfwTable, ok := idx.activeIpfwTableByService[svc]; ok {
+		for _, ipfwTable := range ipfwTable {
 			idx.maybeReportLive()
 			// Active service has had an EndpointSlice deleted. Iterate all the ip set members
 			// contributed by this endpoint slice and decref them. For those which go from 1 to 0,
 			// we should send a membership removal from the data plane.
-			oldContributions := idx.membersFromEndpointSlice(es, ipSet.IncludePorts())
+			oldContributions := idx.membersFromEndpointSlice(es, ipfwTable.IncludePorts())
 			log.Debugf("EndpointSlice Delete contributed members: %+v", oldContributions)
 			for _, oldMember := range oldContributions {
-				newRefCount := ipSet.memberToRefCount[oldMember] - 1
+				newRefCount := ipfwTable.memberToRefCount[oldMember] - 1
 				if newRefCount == 0 {
-					idx.OnMemberRemoved(ipSet.ID, oldMember)
-					delete(ipSet.memberToRefCount, oldMember)
+					idx.OnMemberRemoved(ipfwTable.ID, oldMember)
+					delete(ipfwTable.memberToRefCount, oldMember)
 				} else {
-					ipSet.memberToRefCount[oldMember] = newRefCount
+					ipfwTable.memberToRefCount[oldMember] = newRefCount
 				}
 			}
 		}
@@ -192,13 +192,13 @@ func serviceName(es *discovery.EndpointSlice) string {
 	return name
 }
 
-func (idx *ServiceIndex) membersFromEndpointSlice(es *discovery.EndpointSlice, includePorts bool) []labelindex.IPSetMember {
+func (idx *ServiceIndex) membersFromEndpointSlice(es *discovery.EndpointSlice, includePorts bool) []labelindex.IpfwTableMember {
 	if es == nil {
 		// A nil endpoint slice produces no IP set members.
 		return nil
 	}
 
-	members := []labelindex.IPSetMember{}
+	members := []labelindex.IpfwTableMember{}
 	if includePorts {
 		for _, ep := range es.Endpoints {
 			// Create a member for each endpoint + port combination. If there
@@ -227,7 +227,7 @@ func (idx *ServiceIndex) membersFromEndpointSlice(es *discovery.EndpointSlice, i
 								proto = labelindex.ProtocolSCTP
 							}
 						}
-						members = append(members, labelindex.IPSetMember{
+						members = append(members, labelindex.IpfwTableMember{
 							CIDR:       cidr,
 							Protocol:   proto,
 							PortNumber: uint16(*port.Port),
@@ -247,16 +247,16 @@ func (idx *ServiceIndex) membersFromEndpointSlice(es *discovery.EndpointSlice, i
 					continue
 				}
 
-				members = append(members, labelindex.IPSetMember{CIDR: cidr})
+				members = append(members, labelindex.IpfwTableMember{CIDR: cidr})
 			}
 		}
 	}
 	return members
 }
 
-func (idx *ServiceIndex) UpdateIPSet(id string, serviceName string) {
+func (idx *ServiceIndex) UpdateIpfwTable(id string, serviceName string) {
 	logc := log.WithFields(log.Fields{"id": id, "service": serviceName})
-	if curr, ok := idx.activeIPSetsByID[id]; !ok {
+	if curr, ok := idx.activeIpfwTableByID[id]; !ok {
 		// No existing entry - this is a new IP set.
 		logc.Debugf("New IP set")
 	} else if curr.ServiceName == serviceName {
@@ -271,16 +271,16 @@ func (idx *ServiceIndex) UpdateIPSet(id string, serviceName string) {
 	}
 
 	// New active service IP set.
-	as := &ipSetData{
+	as := &ipfwTableData{
 		ID:               id,
 		ServiceName:      serviceName,
-		memberToRefCount: map[labelindex.IPSetMember]uint64{},
+		memberToRefCount: map[labelindex.IpfwTableMember]uint64{},
 	}
-	idx.activeIPSetsByID[id] = as
-	if _, ok := idx.activeIPSetsByService[serviceName]; !ok {
-		idx.activeIPSetsByService[serviceName] = make(map[string]*ipSetData)
+	idx.activeIpfwTableByID[id] = as
+	if _, ok := idx.activeIpfwTableByService[serviceName]; !ok {
+		idx.activeIpfwTableByService[serviceName] = make(map[string]*ipfwTableData)
 	}
-	idx.activeIPSetsByService[serviceName][id] = as
+	idx.activeIpfwTableByService[serviceName][id] = as
 	logc.Debugf("Active service IP set")
 
 	// We need to scan for possible updates to the IP set membership. Check endpoint slices for this
@@ -300,8 +300,8 @@ func (idx *ServiceIndex) UpdateIPSet(id string, serviceName string) {
 	}
 }
 
-func (idx *ServiceIndex) DeleteIPSet(id string) {
-	as := idx.activeIPSetsByID[id]
+func (idx *ServiceIndex) DeleteIpfwTable(id string) {
+	as := idx.activeIpfwTableByID[id]
 	if as == nil {
 		log.WithField("id", id).Warning("Delete of unknown IP set, ignoring")
 		return
@@ -316,10 +316,10 @@ func (idx *ServiceIndex) DeleteIPSet(id string) {
 		idx.OnMemberRemoved(id, member)
 	}
 
-	delete(idx.activeIPSetsByID, id)
-	delete(idx.activeIPSetsByService[as.ServiceName], id)
-	if len(idx.activeIPSetsByService[as.ServiceName]) == 0 {
-		delete(idx.activeIPSetsByService, as.ServiceName)
+	delete(idx.activeIpfwTableByID, id)
+	delete(idx.activeIpfwTableByService[as.ServiceName], id)
+	if len(idx.activeIpfwTableByService[as.ServiceName]) == 0 {
+		delete(idx.activeIpfwTableByService, as.ServiceName)
 	}
 }
 
@@ -332,18 +332,18 @@ func (idx *ServiceIndex) maybeReportLive() {
 	idx.lastLiveReport = time.Now()
 }
 
-// ipSetData represents an active service and state regarding its
+// ipfwTableData represents an active service and state regarding its
 // known members.
-type ipSetData struct {
+type ipfwTableData struct {
 	ServiceName string
 	ID          string
 
 	// memberToRefCount tracks the count of each member. We need to reference count because
 	// it's possible for a given IP set member may exist in more than one EndpointSlice. The reference
 	// count lets us properly detect when a member is new or has been deleted.
-	memberToRefCount map[labelindex.IPSetMember]uint64
+	memberToRefCount map[labelindex.IpfwTableMember]uint64
 }
 
-func (isd *ipSetData) IncludePorts() bool {
+func (isd *ipfwTableData) IncludePorts() bool {
 	return !strings.HasPrefix(isd.ID, "svcnoport")
 }

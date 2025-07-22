@@ -18,6 +18,9 @@
 //
 // It does not call the bpf() syscall itself but executes external programs
 // like bpftool and ip.
+
+//go:build !freebsd
+
 package bpf
 
 import (

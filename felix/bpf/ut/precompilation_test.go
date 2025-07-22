@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build !freebsd
+
 package ut
 
 import (
@@ -23,7 +25,7 @@ import (
 
 	. "github.com/onsi/gomega"
 	log "github.com/sirupsen/logrus"
-	"github.com/vishvananda/netlink"
+	"github.com/oss-fun/netlink"
 
 	"github.com/projectcalico/calico/felix/bpf/bpfdefs"
 	"github.com/projectcalico/calico/felix/bpf/bpfutils"

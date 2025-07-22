@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !windows
+//go:build !(windows || freebsd)
 
 package dataplane
 
@@ -391,8 +391,8 @@ func StartDataplaneDriver(configParams *config.Config,
 			dpConfig.BPFDSROptoutCIDRs = configParams.BPFDSROptoutCIDRs
 		}
 
-		intDP := intdataplane.NewIntDataplaneDriver(dpConfig)
-		intDP.Start()
+		IntDP = intdataplane.NewIntDataplaneDriver(dpConfig)
+		IntDP.Start()
 
 		// Set source-destination-check on AWS EC2 instance.
 		check := apiv3.AWSSrcDstCheckOption(configParams.AWSSrcDstCheck)

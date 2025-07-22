@@ -30,13 +30,13 @@ func (m MsgStringer) String() string {
 	if log.GetLevel() < log.DebugLevel && m.Msg != nil {
 		const truncateAt = 10
 		switch msg := m.Msg.(type) {
-		case *IPSetUpdate:
+		case *IpfwTableUpdate:
 			if len(msg.Members) < truncateAt {
 				return fmt.Sprintf("%v", msg)
 			}
 			return fmt.Sprintf("id:%#v members(%d):%#v(truncated)",
 				msg.Id, len(msg.Members), msg.Members[:truncateAt])
-		case *IPSetDeltaUpdate:
+		case *IpfwTableDeltaUpdate:
 			if len(msg.AddedMembers) < truncateAt && len(msg.RemovedMembers) < truncateAt {
 				return fmt.Sprintf("%v", msg)
 			}

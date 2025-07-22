@@ -671,8 +671,8 @@ github.com/opencontainers/runtime-spec v1.0.3-0.20220909204839-494a5a6aca78/go.m
 github.com/opencontainers/selinux v1.10.0/go.mod h1:2i0OySw99QjzBBQByd1Gr9gSjvuho1lHsJxIJ3gGbJI=
 github.com/opencontainers/selinux v1.10.1 h1:09LIPVRP3uuZGQvgR+SgMSNBd1Eb3vlRbGqQpoHsF8w=
 github.com/opencontainers/selinux v1.10.1/go.mod h1:2i0OySw99QjzBBQByd1Gr9gSjvuho1lHsJxIJ3gGbJI=
-github.com/oss-fun/netlink v0.0.0-20250428125919-eb1fe73a7bd3 h1:jTBWXrq5wtayGIx3PtFemgKeSpQprM1Z8adUcdHi2tc=
-github.com/oss-fun/netlink v0.0.0-20250428125919-eb1fe73a7bd3/go.mod h1:LqJd8yWUAJrNWPdPQAMhjFLtoAKFI6ZxDp9XwsEZ1kc=
+github.com/oss-fun/netlink v0.0.0-20250324072711-caf436998bd0 h1:lDt9qHlbu4Wt9OwYJsAWpXyFYLYR+Ljd7eqan0hY4gU=
+github.com/oss-fun/netlink v0.0.0-20250324072711-caf436998bd0/go.mod h1:fnzXJP1h3N55cZcoN3qUSyXAdcqRRU8cjtTrM3WQ6W8=
 github.com/oss-fun/plugins v0.0.0-20250520090247-02642f48f98d h1:nh/AKxdRNleaDEnLnKZq+WYWQ4ypVCGimTwy9eJwdiM=
 github.com/oss-fun/plugins v0.0.0-20250520090247-02642f48f98d/go.mod h1:pH2sQ43tuk2wX9fGfHyq75LuKJ+DxN8Cnz0Y2/XxoEw=
 github.com/oss-fun/vnet v0.0.0-20250315043324-63ed7f6e848a h1:YKCCKMC6RNrxOck/nVAURClHDSWwpcg4bruon2odZQ0=

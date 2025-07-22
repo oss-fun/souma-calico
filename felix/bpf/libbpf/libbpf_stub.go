@@ -13,6 +13,7 @@
 // limitations under the License.
 
 //go:build !cgo
+//go:build !freebsd
 
 package libbpf
 

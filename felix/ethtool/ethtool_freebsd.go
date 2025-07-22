@@ -1,5 +1,8 @@
 // Copyright (c) 2021 Tigera, Inc. All rights reserved.
 //
+// Based on the version in the Weave project, Copyright Weaveworks:
+// https://github.com/weaveworks/weave/blob/c69e140e9e43d456b6fe5812a2bc61bc67953b93/net/ethtool.go
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -12,34 +15,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build windows
-
-package wireguard
+package ethtool
 
 import (
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/sirupsen/logrus"
+	"fmt"
+	"os"
+	"os/exec"
 )
 
-var _ prometheus.Collector = (*Metrics)(nil)
+const (
+	EthtoolRxGRO = "rx-gro"
+)
 
-type Metrics struct {
-}
-
-func (collector *Metrics) Describe(_ chan<- *prometheus.Desc) {
-}
-
-func (collector *Metrics) Collect(_ chan<- prometheus.Metric) {
-}
-
-func MustNewWireguardMetrics() *Metrics {
-	wg, err := NewWireguardMetrics()
+func EthtoolTXOff(name string) error {
+	cmd := exec.Command("ifconfig", name, "txcsum")
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		logrus.Panic(err)
+		fmt.Fprintln(os.Stderr, string(out))
 	}
-	return wg
+	return err
 }
 
-func NewWireguardMetrics() (*Metrics, error) {
-	return &Metrics{}, nil
+func EthtoolChangeImpl(iface string, config map[string]bool) error {
+	// not supported.
+	return nil
 }
