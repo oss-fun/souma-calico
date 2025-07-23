@@ -16,8 +16,6 @@ package rules
 
 import (
 	"net"
-	"reflect"
-	"strings"
 
 	log "github.com/sirupsen/logrus"
 
@@ -340,36 +338,6 @@ var unusedBitsInBPFMode = map[string]bool{
 }
 
 func (c *Config) validate() {
-	// Scan for unset ipfw mark bits.  We use reflection so that we have a hope of catching
-	// newly-added fields.
-	myValue := reflect.ValueOf(c).Elem()
-	myType := myValue.Type()
-	found := 0
-	usedBits := uint32(0)
-	for i := 0; i < myValue.NumField(); i++ {
-		fieldName := myType.Field(i).Name
-		if strings.HasPrefix(fieldName, "ipfwMark") && fieldName != "ipfwMarkNonCaliEndpoint" {
-			if c.BPFEnabled && unusedBitsInBPFMode[fieldName] {
-				log.WithField("field", fieldName).Debug("Ignoring unused field in BPF mode.")
-				continue
-			}
-			bits := myValue.Field(i).Interface().(uint32)
-			if bits == 0 {
-				log.WithField("field", fieldName).Panic(
-					"ipfwMarkXXX field not set.")
-			}
-			if usedBits&bits > 0 {
-				log.WithField("field", fieldName).Panic(
-					"ipfwMarkXXX field overlapped with another's bits.")
-			}
-			usedBits |= bits
-			found++
-		}
-	}
-	if found == 0 {
-		// Check the reflection found something we were expecting.
-		log.Panic("Didn't find any ipfwMarkXXX fields.")
-	}
 }
 
 func NewRenderer(config Config) RuleRenderer {
