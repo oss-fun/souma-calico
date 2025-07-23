@@ -15,7 +15,10 @@ type TagNumManager struct {
 }
 
 func NewTagNumManager(tagName string) *TagNumManager {
-	return &TagNumManager{name: tagName}
+	return &TagNumManager{
+		name: tagName,
+		usedNum: make(map[uint16]bool),
+	}
 }
 
 func (tm *TagNumManager) NextTagNum() (uint16, error) {
@@ -23,6 +26,7 @@ func (tm *TagNumManager) NextTagNum() (uint16, error) {
 	defer tm.mutex.Unlock()
 
 	var result uint16
+	result = 1
 	for ; result <= 65535; result++ {
 		if tm.usedNum[result] == true {
 			continue
