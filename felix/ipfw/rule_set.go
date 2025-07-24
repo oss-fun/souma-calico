@@ -184,13 +184,7 @@ func NewRuleSet(
 	dirtyAppend.Add("all")
 	refcounts["all"] += 1
 
-	var insertMode string
-	switch options.InsertMode {
-	case "append":
-		insertMode = "append"
-	default:
-		log.WithField("insertMode", options.InsertMode).Panic("Unknown insert mode")
-	}
+	insertMode := "append"
 
 	if options.PostWriteInterval <= minPostWriteInterval {
 		log.WithFields(log.Fields{
