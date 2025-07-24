@@ -608,7 +608,7 @@ func (t *RuleSet) applyUpdates() error {
 func (t *RuleSet) InsertOrAppendRules(chainName string, rules []Rule) {
 	t.logCxt.WithField("chainName", chainName).Debug("Updating rule insertions")
 	oldRules := t.chainToInsertedRules[chainName]
-	t.chainToInsertedRules[chainName] = rules
+	t.chainToAppendedRules[chainName] = rules
 	numRulesDelta := len(rules) - len(oldRules)
 	t.gaugeNumRules.Add(float64(numRulesDelta))
 	t.dirtyAppend.Add(chainName)

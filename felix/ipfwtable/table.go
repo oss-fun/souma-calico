@@ -274,7 +274,7 @@ func (s *IpfwTable) ApplyUpdates() {
 		}
 		if s.resyncRequired {
 			s.logCxt.Debug("Resyncing ipsets with dataplane.")
-			s.opReporter.RecordOperation(fmt.Sprint("resync-ipsets-v", s.IPVersionConfig.Family.Version()))
+			s.opReporter.RecordOperation(fmt.Sprint("resync-ipfwtable-v", s.IPVersionConfig.Family.Version()))
 
 			if err := s.tryResync(); err != nil {
 				s.logCxt.WithError(err).Warning("Failed to resync with dataplane")
@@ -369,7 +369,7 @@ func (s *IpfwTable) tryResync() (err error) {
 
 func (s *IpfwTable) CalicoIpfwTable() ([]string, error) {
 	var ipfwTable []string
-	err := s.runIpfwTableList("-name", func(scanner *bufio.Scanner) error {
+	err := s.runIpfwTableList("all", func(scanner *bufio.Scanner) error {
 		debug := log.GetLevel() >= log.DebugLevel
 		for scanner.Scan() {
 			name := scanner.Text()

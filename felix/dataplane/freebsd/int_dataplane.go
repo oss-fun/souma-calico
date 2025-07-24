@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"reflect"
 	"regexp"
 	"sync"
@@ -1071,19 +1072,12 @@ func drainChan[T any](c <-chan T, f func(T)) {
 }
 
 func (d *InternalDataplane) configureKernel() {
-	// Attempt to modprobe nf_conntrack_proto_sctp.  In some kernels this is a
-	// module that needs to be loaded, otherwise all SCTP packets are marked
-	// INVALID by conntrack and dropped by Calico's rules.  However, some kernels
-	// (confirmed in Ubuntu 19.10's build of 5.3.0-24-generic) include this
-	// conntrack without it being a kernel module, and so modprobe will fail.
-	// Log result at INFO level for troubleshooting, but otherwise ignore any
-	// failed modprobe calls.
 	mp := newModProbe(moduleConntrackSCTP, newRealCmd)
 	out, err := mp.Exec()
 	log.WithError(err).WithField("output", out).Infof("attempted to modprobe %s", moduleConntrackSCTP)
 
 	log.Info("Making sure IPv4 forwarding is enabled.")
-	err = writeProcSys("/proc/sys/net/ipv4/ip_forward", "1")
+	err = exec.Command("sysctl", "-w", "net.inet.ip.forwarding=1").Run()
 	if err != nil {
 		log.WithError(err).Error("Failed to set IPv4 forwarding sysctl")
 	}
