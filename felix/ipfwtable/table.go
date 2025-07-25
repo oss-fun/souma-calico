@@ -3,6 +3,8 @@
 package ipfwtable
 
 import (
+	"os"
+	"os/exec"
 	"bufio"
 	"bytes"
 	"fmt"
@@ -21,6 +23,7 @@ import (
 
 const (
 	MaxIpfwTableDeletionsPerIteration = 1
+	RESTORE_FILE = "/tmp/ipfw_table_restore.sh"
 )
 
 type dataplaneMetadata struct {
@@ -646,36 +649,17 @@ func (s *IpfwTable) tryUpdates() error {
 	}
 	s.opReporter.RecordOperation(fmt.Sprint("update-ipfw-table-", s.IPVersionConfig.Family.Version()))
 
-	start := time.Now()
 	countNumIpfwTableCalls.Inc()
-	cmd := s.newCmd("ipfw")
-	rawStdin, err := cmd.StdinPipe()
+	file, err := os.OpenFile(RESTORE_FILE, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {
-		s.logCxt.WithError(err).Error("Failed to create pipe for ipfw restore.")
+ 		s.logCxt.WithError(err).Error("Failed to open file for writing ipfw restore input.")  
 		return err
 	}
 
-	stdin := io.MultiWriter(&s.restoreInCopy, rawStdin)
-	defer s.restoreInCopy.Reset()
+	_, shErr := file.Write([]byte("#!/bin/sh\n"))
 
-	cmd.SetStderr(&s.stderrCopy)
-	defer s.stderrCopy.Reset()
-	cmd.SetStdout(&s.stdoutCopy)
-	defer s.stdoutCopy.Reset()
-
-	startTime := time.Now()
-	err = cmd.Start()
-	if err != nil {
-		s.logCxt.WithError(err).Error("Failed to start ipfw restore.")
-		closeErr := rawStdin.Close()
-		if closeErr != nil {
-			s.logCxt.WithError(closeErr).Error(
-				"Error closing stdin while handling start error")
-		}
-		return err
-	}
-	summaryExecStart.Observe(float64(time.Since(startTime).Nanoseconds()) / 1000.0)
-
+	stdin := io.MultiWriter(&s.restoreInCopy, file)
+	
 	var writeErr error
 	for _, setName := range dirtyIpfwTable {
 		if log.IsLevelEnabled(log.DebugLevel) {
@@ -687,24 +671,18 @@ func (s *IpfwTable) tryUpdates() error {
 		}
 	}
 
-	_, commitErr := stdin.Write([]byte("COMMIT\n"))
-	flushErr := rawStdin.Flush()
-	closeErr := rawStdin.Close()
-	processErr := cmd.Wait()
-	if err = firstNonNilErr(writeErr, commitErr, flushErr, closeErr, processErr); err != nil {
+	file.Close()
+	cmdErr := exec.Command(RESTORE_FILE).Run()
+
+	if err = firstNonNilErr(shErr, writeErr, cmdErr); err != nil {
 		s.logCxt.WithFields(log.Fields{
+			"shErr":      shErr,
 			"writeErr":   writeErr,
-			"commitErr":  commitErr,
-			"flushErr":   flushErr,
-			"closeErr":   closeErr,
-			"processErr": processErr,
-			"stdout":     s.stdoutCopy.String(),
-			"stderr":     s.stderrCopy.String(),
+			"cmdErr":     cmdErr,
 			"input":      s.restoreInCopy.String(),
 		}).Warning("Failed to complete ipfw restore, IP sets may be out-of-sync.")
-		return fmt.Errorf("failed to write one or more IP set: %v", err)
+		return fmt.Errorf("failed to write one or more Ipfw: %v", err)
 	}
-	log.Debugf("Updated %d Ipfw in %v", len(dirtyIpfwTable), time.Since(start))
 
 	s.ipfwTableWithDirtyMembers.Clear()
 
@@ -769,16 +747,17 @@ func (s *IpfwTable) writeUpdates(setName string, w io.Writer) (err error) {
 	}
 	if needCreate || needTempIpfwTable {
 		logCxt.WithField("ipSetToCreate", targetSet).Debug("Creating IP set")
-
-		writeLine("create %s %s family %s maxelem %d",
-			targetSet, desiredMeta.Type, s.IPVersionConfig.Family, desiredMeta.MaxSize)
+		if desiredMeta.Type == "net" || desiredMeta.Type == "ip" {
+			desiredMeta.Type = "addr"
+		}
+		writeLine("ipfw table %s create type %s", targetSet, desiredMeta.Type)
 
 	}
 	if err != nil {
 		return
 	}
 	members.PendingDeletions().Iter(func(member IpfwTableMember) deltatracker.IterAction {
-		writeLine("del %s %s --exist", targetSet, member)
+		writeLine("ipfw table %s delete %s", targetSet, member)
 		if err != nil {
 			// Note, just exiting early here to save a load of no-ops.
 			// If we exit with an error, the dataplane state will be resynced.
@@ -788,7 +767,7 @@ func (s *IpfwTable) writeUpdates(setName string, w io.Writer) (err error) {
 	})
 	members.PendingUpdates().Iter(func(member IpfwTableMember) deltatracker.IterAction {
 		memberStr := member.String()
-		writeLine("add %s %s", targetSet, memberStr)
+		writeLine("ipfw table %s add %s", targetSet, memberStr)
 		if err != nil {
 			// Note, just exiting early here to save a load of no-ops.
 			// If we exit with an error, the dataplane state will be resynced.
@@ -796,9 +775,6 @@ func (s *IpfwTable) writeUpdates(setName string, w io.Writer) (err error) {
 		}
 		return deltatracker.IterActionUpdateDataplane
 	})
-	if needTempIpfwTable {
-		writeLine("swap %s %s", setName, targetSet)
-	}
 	if err != nil {
 		return
 	}
