@@ -3,6 +3,7 @@
 package ipfwtable
 
 import (
+	"regexp"
 	"os"
 	"os/exec"
 	"bufio"
@@ -332,6 +333,7 @@ func (s *IpfwTable) tryResync() (err error) {
 	s.setNameToProgrammedMetadata.Dataplane().DeleteAll()
 
 	ipfwTable, err := s.CalicoIpfwTable()
+	s.logCxt.Debugf("[souma-log] DEBUG CalicoIpfwTable returned: %v", ipfwTable)
 	if err != nil {
 		s.logCxt.WithError(err).Error("Failed to get the list of ipsets")
 		fmt.Printf("\n[souma-log] calicoipfwtableがダメみたい\n")
@@ -379,11 +381,37 @@ func (s *IpfwTable) tryResync() (err error) {
 
 func (s *IpfwTable) CalicoIpfwTable() ([]string, error) {
 	var ipfwTable []string
+	/*
 	err := s.runIpfwTableList("all", func(scanner *bufio.Scanner) error {
 		debug := log.GetLevel() >= log.DebugLevel
 		for scanner.Scan() {
 			name := scanner.Text()
 			// Look up to see if this is one of our IP sets.
+			if !s.IPVersionConfig.OwnsIpfwTable(name) {
+				if debug {
+					s.logCxt.WithField("name", name).Debug("Skip non-Calico/wrong version IP set.")
+				}
+				continue
+			}
+			ipfwTable = append(ipfwTable, name)
+		}
+		return scanner.Err()
+	})
+	*/
+	err := s.runIpfwTableList("all", func(scanner *bufio.Scanner) error {
+		log.Debug("[souma-log] Entering runIpfwTableList")
+		debug := true
+		re := regexp.MustCompile(`^--- table\(([^)]+)\),`)
+		for scanner.Scan() {
+			line := scanner.Text()
+			s.logCxt.WithField("line", line).Debug("[souma-log] ipfw table output line")
+			match := re.FindStringSubmatch(line)
+			if match == nil {
+				continue // データ行（例: 172.16.0.0/16 0）は無視
+			}
+			name := match[1] // "cali4t4" など
+			s.logCxt.WithField("name", name).Debug("[souma-log] ipfw table catch table name")
+
 			if !s.IPVersionConfig.OwnsIpfwTable(name) {
 				if debug {
 					s.logCxt.WithField("name", name).Debug("Skip non-Calico/wrong version IP set.")
@@ -675,6 +703,13 @@ func (s *IpfwTable) tryUpdates() error {
 		writeErr = s.writeUpdates(setName, stdin)
 		if writeErr != nil {
 			break
+		}
+
+		desiredMeta, ok := s.setNameToProgrammedMetadata.Desired().Get(setName)
+		if ok {
+			s.setNameToProgrammedMetadata.Dataplane().Set(setName, desiredMeta)
+		} else {
+			log.WithField("setName", setName).Warn("No desired metadata found; skipping Set()")
 		}
 	}
 
