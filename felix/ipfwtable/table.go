@@ -264,6 +264,7 @@ func (s *IpfwTable) GetDesiredMembers(setID string) (set.Set[string], error) {
 }
 
 func (s *IpfwTable) ApplyUpdates() {
+	fmt.Printf("\n[souma-log] ApplyUpdates() Start\n")
 	success := false
 	retryDelay := 1 * time.Millisecond
 	backOff := func() {
@@ -304,7 +305,9 @@ func (s *IpfwTable) ApplyUpdates() {
 		s.dumpIpfwTableToLog()
 		s.logCxt.Panic("Failed to update IP sets after multiple retries.")
 	}
+	fmt.Printf("\n[souma-log] for attemptがsuccessで抜けてる\n")
 	gaugeNumTotalIpfwTable.Set(float64(s.setNameToProgrammedMetadata.Dataplane().Len()))
+	fmt.Printf("\n[souma-log] ApplyUpdates() Finish\n")
 }
 
 func (s *IpfwTable) tryResync() (err error) {
@@ -331,6 +334,7 @@ func (s *IpfwTable) tryResync() (err error) {
 	ipfwTable, err := s.CalicoIpfwTable()
 	if err != nil {
 		s.logCxt.WithError(err).Error("Failed to get the list of ipsets")
+		fmt.Printf("\n[souma-log] calicoipfwtableがダメみたい\n")
 		return
 	}
 	if debug {
@@ -344,6 +348,7 @@ func (s *IpfwTable) tryResync() (err error) {
 		err = s.resyncIpfwTable(name)
 		if err != nil {
 			s.logCxt.WithError(err).Errorf("Failed to parse ipset %v", name)
+			fmt.Printf("\n[souma-log] resyncIpfwTableがダメみたい: %v\n", err)
 			return
 		}
 	}
@@ -360,6 +365,7 @@ func (s *IpfwTable) tryResync() (err error) {
 			log.WithField("name", name).Warn(
 				"Cleaning up leaked(?) IP set member tracker.")
 			delete(s.mainSetNameToMembers, name)
+			fmt.Printf("\n[souma-log] setNameToProgrammed~~がダメみたい: %v\n", err)
 			continue
 		}
 		// We're tracking this IP set, but we didn't find it in the dataplane;
@@ -367,6 +373,7 @@ func (s *IpfwTable) tryResync() (err error) {
 		members.Dataplane().DeleteAll()
 	}
 
+	fmt.Printf("\n[souma-log] ここでipfwの状態を見てる？ err: %v\n", err)
 	return
 }
 

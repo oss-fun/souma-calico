@@ -297,6 +297,8 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 
 	epTagMapper := rules.NewEndpointTagMapper(config.RulesConfig.IpfwTagNonCaliEndpoint)
 
+	fmt.Printf("[souma-log] config.MTUIfacePattern: %v\n", config.MTUIfacePattern)
+
 	// Auto-detect host MTU.
 	hostMTU, err := findHostMTU(config.MTUIfacePattern)
 	if err != nil {
@@ -1151,6 +1153,7 @@ func (d *InternalDataplane) apply() {
 	for _, ipfwTable := range d.ipfwTable {
 		ipfwTableWG.Add(1)
 		go func(ipfwTable common.IpfwTableDataplane) {
+			fmt.Printf("[souma-log] ApplyUpdates呼び出し\n")
 			ipfwTable.ApplyUpdates()
 			d.reportHealth()
 			ipfwTableWG.Done()

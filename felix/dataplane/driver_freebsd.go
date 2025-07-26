@@ -32,6 +32,7 @@ import (
 	extdataplane "github.com/projectcalico/calico/felix/dataplane/external"
 	"github.com/projectcalico/calico/felix/dataplane/inactive"
 	intdataplane "github.com/projectcalico/calico/felix/dataplane/freebsd"
+	"github.com/projectcalico/calico/felix/idalloc"
 	"github.com/projectcalico/calico/felix/ifacemonitor"
 	"github.com/projectcalico/calico/felix/logutils"
 	"github.com/projectcalico/calico/felix/tagnum"
@@ -90,6 +91,9 @@ func StartDataplaneDriver(configParams *config.Config,
 			"endpointTag":        tagEndpointMark,
 			"endpointMarkNonCali": tagEndpointNonCaliEndpoint,
 		}).Info("Calculated ipfw mark bits")
+
+		reservedTables := []idalloc.IndexRange{{Min: 253, Max: 255}}
+		routeTableIndexAllocator := idalloc.NewIndexAllocator(configParams.RouteTableIndices(), reservedTables)
 
 		// Extract node labels from the hosts such they could be referenced later
 		// e.g. Topology Aware Hints.
@@ -205,6 +209,8 @@ func StartDataplaneDriver(configParams *config.Config,
 			DebugSimulateDataplaneApplyDelay:   configParams.DebugSimulateDataplaneApplyDelay,
 			ExternalNodesCidrs:                 configParams.ExternalNodesCIDRList,
 			SidecarAccelerationEnabled:         configParams.SidecarAccelerationEnabled,
+			RouteTableManager:                  routeTableIndexAllocator,
+			MTUIfacePattern:                    configParams.MTUIfacePattern,
 
 			FeatureDetectOverrides: configParams.FeatureDetectOverride,
 			FeatureGates:           configParams.FeatureGates,
