@@ -18,6 +18,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/sirupsen/logrus"
+
 	"github.com/projectcalico/calico/cni-plugin/pkg/ipamplugin"
 	"github.com/projectcalico/calico/cni-plugin/pkg/plugin"
 )
@@ -26,6 +28,7 @@ import (
 var VERSION string
 
 func main() {
+	logrus.Debug("[souma-log] -------- calico start --------")
 	// Use the name of the binary to determine which routine to run.
 	_, filename := filepath.Split(os.Args[0])
 	switch filename {

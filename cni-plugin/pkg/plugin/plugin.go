@@ -146,6 +146,7 @@ func pollEndpointReadiness(endpoint string, interval, timeout time.Duration) err
 }
 
 func cmdAdd(args *skel.CmdArgs) (err error) {
+	logrus.Debug("[souma-log] -------- Start cmdAdd --------")
 	// Defer a panic recover, so that in case we panic we can still return
 	// a proper error to the runtime.
 	defer func() {
@@ -179,6 +180,7 @@ func cmdAdd(args *skel.CmdArgs) (err error) {
 
 	utils.ConfigureLogging(conf)
 
+	logrus.Debug("[souma-log] Get nodename")
 	nodeNameFile := "/var/lib/calico/nodename"
 	if conf.NodenameFile != "" {
 		nodeNameFile = conf.NodenameFile
@@ -194,6 +196,7 @@ func cmdAdd(args *skel.CmdArgs) (err error) {
 	}
 
 	// Determine MTU to use.
+	logrus.Debug("[souma-log] Get mtu")
 	if mtu, err := utils.MTUFromFile("/var/lib/calico/mtu"); err != nil {
 		return fmt.Errorf("failed to read MTU file: %s", err)
 	} else if conf.MTU == 0 && mtu != 0 {

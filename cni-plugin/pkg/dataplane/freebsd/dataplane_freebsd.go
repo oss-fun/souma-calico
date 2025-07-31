@@ -86,6 +86,7 @@ func (d *freebsdDataplane) DoNetworking(
 		d.logger.Infof("Cleaning old hostVeth: %v", hostVethName)
 	}
 
+/*
 	err = ns.WithNetNSPath(args.Netns, func(hostNS ns.NetNS) error {
 		la := netlink.NewLinkAttrs()
 		la.Name = contVethName
@@ -102,7 +103,28 @@ func (d *freebsdDataplane) DoNetworking(
 			d.logger.Errorf("Error adding veth %+v: %s", veth, err)
 			return err
 		}
+*/
+	la := netlink.NewLinkAttrs()
+	la.Name = contVethName
+	la.MTU = d.mtu
+	la.NumTxQueues = d.queues
+	la.NumRxQueues = d.queues
+	epair := &netlink.Veth{
+		LinkAttrs: la,
+		PeerName: hostVethName,
+	}
 
+	if err = netlink.LinkAdd(epair); err != nil {
+		d.logger.Errorf("Error adding epair %+v: %s", veth, err)
+		return err
+	}
+
+	// 多分args.netnsをjidに変換しなきゃエラー出る気がする
+	if err = netlink.LinkSetNsFd(epair, args.netns); err != nil {
+		d.logger.Errorf("Error setting epair(%+v) in vnet: %s", veth, err)
+		return err
+	}
+/*
 		hostVeth, err := hostNlHandle.LinkByName(hostVethName)
 		if err != nil {
 			err = fmt.Errorf("failed to lookup %q: %v", hostVethName, err)
@@ -124,21 +146,6 @@ func (d *freebsdDataplane) DoNetworking(
 			if addr.Address.IP.To4() != nil {
 				hasIPv4 = true
 				addr.Address.Mask = net.CIDRMask(32, 32)
-			} else if addr.Address.IP.To16() != nil {
-				hasIPv6 = true
-				addr.Address.Mask = net.CIDRMask(128, 128)
-			}
-		}
-
-		if hasIPv6 {
-			// By default, the kernel does duplicate address detection for the IPv6 address. DAD delays use of the
-			// IP for up to a second and we don't need it because it's a point-to-point link.
-			//
-			// This must be done before we set the links UP.
-			logrus.Debug("Interface has IPv6 address, disabling DAD.")
-			err = disableDAD(contVethName)
-			if err != nil {
-				return err
 			}
 		}
 
@@ -226,67 +233,7 @@ func (d *freebsdDataplane) DoNetworking(
 				}
 			}
 		}
-
-		if hasIPv6 {
-			// Make sure ipv6 is enabled in the container/pod network namespace.
-			// Without these sysctls enabled, interfaces will come up but they won't get a link local IPv6 address
-			// which is required to add the default IPv6 route.
-			if err = writeProcSys("/proc/sys/net/ipv6/conf/all/disable_ipv6", "0"); err != nil {
-				return fmt.Errorf("failed to set net.ipv6.conf.all.disable_ipv6=0: %s", err)
-			}
-
-			if err = writeProcSys("/proc/sys/net/ipv6/conf/default/disable_ipv6", "0"); err != nil {
-				return fmt.Errorf("failed to set net.ipv6.conf.default.disable_ipv6=0: %s", err)
-			}
-
-			if err = writeProcSys("/proc/sys/net/ipv6/conf/lo/disable_ipv6", "0"); err != nil {
-				return fmt.Errorf("failed to set net.ipv6.conf.lo.disable_ipv6=0: %s", err)
-			}
-
-			// Retry several times as the LL can take a several micro/milliseconds to initialize and we may be too fast
-			// after these sysctls
-			var err error
-			var addresses []netlink.Addr
-			for i := 0; i < 10; i++ {
-				// No need to add a dummy next hop route as the host veth device will already have an IPv6
-				// link local address that can be used as a next hop.
-				// Just fetch the address of the host end of the veth and use it as the next hop.
-				addresses, err = hostNlHandle.AddrList(hostVeth, netlink.FAMILY_V6)
-				if err != nil {
-					d.logger.Errorf("Error listing IPv6 addresses for the host side of the veth pair: %s", err)
-				}
-
-				if len(addresses) < 1 {
-					// If the hostVeth doesn't have an IPv6 address then this host probably doesn't
-					// support IPv6. Since a IPv6 address has been allocated that can't be used,
-					// return an error.
-					err = fmt.Errorf("failed to get IPv6 addresses for host side of the veth pair")
-				}
-				if err == nil {
-					break
-				}
-
-				d.logger.Infof("No IPv6 set on interface, retrying..")
-				time.Sleep(50 * time.Millisecond)
-			}
-
-			if err != nil {
-				return err
-			}
-
-			hostIPv6Addr := addresses[0].IP
-
-			for _, r := range routes {
-				if r.IP.To4() != nil {
-					d.logger.WithField("route", r).Debug("Skipping non-IPv6 route")
-					continue
-				}
-				d.logger.WithField("route", r).Debug("Adding IPv6 route")
-				if err = ip.AddRoute(r, hostIPv6Addr, contVeth); err != nil {
-					return fmt.Errorf("failed to add IPv6 route for %v via %v: %v", r, hostIPv6Addr, err)
-				}
-			}
-		}
+*/
 
 		// Now add the IPs to the container side of the veth.
 		for _, addr := range result.IPs {
