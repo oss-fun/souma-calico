@@ -23,9 +23,10 @@ import (
 	"syscall"
 	"time"
 
+	"purplekraken.com/pkg/gojail"
 	"github.com/containernetworking/cni/pkg/skel"
 	cniv1 "github.com/containernetworking/cni/pkg/types/100"
-	"github.com/oss-fun/plugins/pkg/ip"
+	//"github.com/oss-fun/plugins/pkg/ip"
 	"github.com/oss-fun/plugins/pkg/ns"
 	"github.com/sirupsen/logrus"
 	"github.com/oss-fun/netlink"
@@ -67,7 +68,6 @@ func (d *freebsdDataplane) DoNetworking(
 ) (hostVethName, contVethMAC string, err error) {
 	hostVethName = desiredVethName
 	contVethName := args.IfName
-	var hasIPv4, hasIPv6 bool
 
 	d.logger.Infof("Setting the host side veth name to %s", hostVethName)
 
@@ -115,14 +115,19 @@ func (d *freebsdDataplane) DoNetworking(
 	}
 
 	if err = netlink.LinkAdd(epair); err != nil {
-		d.logger.Errorf("Error adding epair %+v: %s", veth, err)
-		return err
+		d.logger.Errorf("Error adding epair %+v: %s", epair, err)
+		return "", "", fmt.Errorf("Failed netlink.LinkAdd: %v", err)
 	}
 
-	// 多分args.netnsをjidに変換しなきゃエラー出る気がする
-	if err = netlink.LinkSetNsFd(epair, args.netns); err != nil {
-		d.logger.Errorf("Error setting epair(%+v) in vnet: %s", veth, err)
-		return err
+	jid, err := gojail.GetId(args.Netns)
+	if err != nil {
+		d.logger.Errorf("Error gojail.GetId: %v", err)
+		return "", "", fmt.Errorf("Failed gojail.GetId: %v", err)
+	}
+
+	if err = netlink.LinkSetNsFd(epair, jid); err != nil {
+		d.logger.Errorf("Error setting epair(%+v) in vnet: %s", epair, err)
+		return "", "", fmt.Errorf("Failed netlink.LinkSetNsFd: %v", err)
 	}
 /*
 		hostVeth, err := hostNlHandle.LinkByName(hostVethName)
@@ -233,7 +238,6 @@ func (d *freebsdDataplane) DoNetworking(
 				}
 			}
 		}
-*/
 
 		// Now add the IPs to the container side of the veth.
 		for _, addr := range result.IPs {
@@ -248,6 +252,7 @@ func (d *freebsdDataplane) DoNetworking(
 
 		return nil
 	})
+*/
 
 	if err != nil {
 		d.logger.Errorf("Error creating veth: %s", err)

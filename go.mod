@@ -104,6 +104,7 @@ require (
 	k8s.io/kubernetes v1.28.12
 	k8s.io/utils v0.0.0-20240310230437-4693a0247e57
 	modernc.org/memory v1.7.2
+	purplekraken.com/pkg/gojail v0.0.0-20230309151211-327bb0c0e206
 	sigs.k8s.io/controller-runtime v0.15.3
 	sigs.k8s.io/kind v0.22.0
 	sigs.k8s.io/yaml v1.4.0
