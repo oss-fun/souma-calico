@@ -20,13 +20,14 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"syscall"
 	"time"
 
 	"purplekraken.com/pkg/gojail"
 	"github.com/containernetworking/cni/pkg/skel"
 	cniv1 "github.com/containernetworking/cni/pkg/types/100"
-	//"github.com/oss-fun/plugins/pkg/ip"
+	"github.com/oss-fun/plugins/pkg/ip"
 	"github.com/oss-fun/plugins/pkg/ns"
 	"github.com/sirupsen/logrus"
 	"github.com/oss-fun/netlink"
@@ -68,6 +69,7 @@ func (d *freebsdDataplane) DoNetworking(
 ) (hostVethName, contVethMAC string, err error) {
 	hostVethName = desiredVethName
 	contVethName := args.IfName
+	var hasIPv4 bool
 
 	d.logger.Infof("Setting the host side veth name to %s", hostVethName)
 
@@ -86,24 +88,6 @@ func (d *freebsdDataplane) DoNetworking(
 		d.logger.Infof("Cleaning old hostVeth: %v", hostVethName)
 	}
 
-/*
-	err = ns.WithNetNSPath(args.Netns, func(hostNS ns.NetNS) error {
-		la := netlink.NewLinkAttrs()
-		la.Name = contVethName
-		la.MTU = d.mtu
-		la.NumTxQueues = d.queues
-		la.NumRxQueues = d.queues
-		veth := &netlink.Veth{
-			LinkAttrs:     la,
-			PeerName:      hostVethName,
-			PeerNamespace: netlink.NsFd(int(hostNS.Fd())),
-		}
-
-		if err := netlink.LinkAdd(veth); err != nil {
-			d.logger.Errorf("Error adding veth %+v: %s", veth, err)
-			return err
-		}
-*/
 	la := netlink.NewLinkAttrs()
 	la.Name = contVethName
 	la.MTU = d.mtu
@@ -129,137 +113,123 @@ func (d *freebsdDataplane) DoNetworking(
 		d.logger.Errorf("Error setting epair(%+v) in vnet: %s", epair, err)
 		return "", "", fmt.Errorf("Failed netlink.LinkSetNsFd: %v", err)
 	}
-/*
-		hostVeth, err := hostNlHandle.LinkByName(hostVethName)
+
+	hostVeth, err := hostNlHandle.LinkByName(hostVethName)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to lookup %q: %v", hostVethName, err)
+	}
+
+	if mac, err := net.ParseMAC("EE:EE:EE:EE:EE:EE"); err != nil {
+		d.logger.Infof("failed to parse MAC Address: %v. Using kernel generated MAC.", err)
+	} else {
+		// Set the MAC address on the host side interface so the kernel does not
+		// have to generate a persistent address which fails some times.
+		if err = hostNlHandle.LinkSetHardwareAddr(hostVeth, mac); err != nil {
+			d.logger.Warnf("failed to Set MAC of %q: %v. Using kernel generated MAC.", hostVethName, err)
+		}
+	}
+
+	// Figure out whether we have IPv4 addresses.
+	for _, addr := range result.IPs {
+		if addr.Address.IP.To4() != nil {
+			hasIPv4 = true
+			addr.Address.Mask = net.CIDRMask(24, 32)
+		}
+	}
+
+	err = d.configureSysctls(hasIPv4)
+	if err != nil {
+		return "", "", fmt.Errorf("error configuring sysctls for interface: %s, error: %w", hostVethName, err)
+	}
+
+	// Explicitly set the veth to UP state; the veth won't get a link local address unless it's set to UP state.
+	if err = hostNlHandle.LinkSetUp(hostVeth); err != nil {
+		return "", "", fmt.Errorf("failed to set %q up: %w", hostVethName, err)
+	}
+
+	contVeth, err := netlink.LinkByName(contVethName)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to lookup %q: %v", contVethName, err)
+	}
+
+	// Explicitly set the veth to UP state; the veth won't get a link local address unless it's set to UP state.
+	if err = netlink.LinkSetUp(contVeth); err != nil {
+		return "", "", fmt.Errorf("failed to set %q up: %w", contVethName, err)
+	}
+
+	// Check if there is an annotation requesting a specific fixed MAC address for the container Veth, otherwise
+	// use kernel-assigned MAC.
+	if requestedContVethMac, found := annotations["cni.projectcalico.org/hwAddr"]; found {
+		tmpContVethMAC, err := net.ParseMAC(requestedContVethMac)
 		if err != nil {
-			err = fmt.Errorf("failed to lookup %q: %v", hostVethName, err)
-			return err
+			return "", "", fmt.Errorf("failed to parse MAC address %v provided via cni.projectcalico.org/hwAddr: %v",
+				requestedContVethMac, err)
 		}
 
-		if mac, err := net.ParseMAC("EE:EE:EE:EE:EE:EE"); err != nil {
-			d.logger.Infof("failed to parse MAC Address: %v. Using kernel generated MAC.", err)
-		} else {
-			// Set the MAC address on the host side interface so the kernel does not
-			// have to generate a persistent address which fails some times.
-			if err = hostNlHandle.LinkSetHardwareAddr(hostVeth, mac); err != nil {
-				d.logger.Warnf("failed to Set MAC of %q: %v. Using kernel generated MAC.", hostVethName, err)
-			}
+		err = netlink.LinkSetHardwareAddr(contVeth, tmpContVethMAC)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to set container veth MAC to %v as requested via cni.projectcalico.org/hwAddr: %v",
+				requestedContVethMac, err)
 		}
 
-		// Figure out whether we have IPv4 and/or IPv6 addresses.
-		for _, addr := range result.IPs {
-			if addr.Address.IP.To4() != nil {
-				hasIPv4 = true
-				addr.Address.Mask = net.CIDRMask(32, 32)
-			}
-		}
+		contVethMAC = tmpContVethMAC.String()
+		d.logger.Infof("successfully configured container veth MAC to %v as requested via cni.projectcalico.org/hwAddr", contVethMAC)
+	} else {
+		contVethMAC = contVeth.Attrs().HardwareAddr.String()
+	}
 
-		err = hostNS.Do(func(_ ns.NetNS) error {
-			err := d.configureSysctls(hostVethName, hasIPv4, hasIPv6)
-			if err != nil {
-				return fmt.Errorf("error configuring sysctls for interface: %s, error: %w", hostVethName, err)
-			}
+	d.logger.WithField("MAC", contVethMAC).Debug("Found MAC for container veth")
 
-			return nil
-		})
+
+	// At this point, the virtual ethernet pair has been created, and both ends have the right names.
+	// Both ends of the veth are still in the container's network namespace.
+
+	// Do the per-IP version set-up.  Add gateway routes etc.
+	if hasIPv4 {
+		// Add a connected route to a dummy next hop so that a default route can be set
+		gw := net.IPv4(169, 254, 1, 1)
+		gwNet := &net.IPNet{IP: gw, Mask: net.CIDRMask(32, 32)}
+		err := netlink.RouteAdd(
+			&netlink.Route{
+				LinkIndex: contVeth.Attrs().Index,
+				Scope:     netlink.SCOPE_LINK,
+				Dst:       gwNet,
+			},
+		)
 
 		if err != nil {
-			return err
+			return "", "", fmt.Errorf("failed to add route inside the container: %v", err)
 		}
 
-		// Explicitly set the veth to UP state; the veth won't get a link local address unless it's set to UP state.
-		if err = hostNlHandle.LinkSetUp(hostVeth); err != nil {
-			return fmt.Errorf("failed to set %q up: %w", hostVethName, err)
-		}
-
-		contVeth, err := netlink.LinkByName(contVethName)
-		if err != nil {
-			err = fmt.Errorf("failed to lookup %q: %v", contVethName, err)
-			return err
-		}
-
-		// Explicitly set the veth to UP state; the veth won't get a link local address unless it's set to UP state.
-		if err = netlink.LinkSetUp(contVeth); err != nil {
-			return fmt.Errorf("failed to set %q up: %w", contVethName, err)
-		}
-
-		// Check if there is an annotation requesting a specific fixed MAC address for the container Veth, otherwise
-		// use kernel-assigned MAC.
-		if requestedContVethMac, found := annotations["cni.projectcalico.org/hwAddr"]; found {
-			tmpContVethMAC, err := net.ParseMAC(requestedContVethMac)
-			if err != nil {
-				return fmt.Errorf("failed to parse MAC address %v provided via cni.projectcalico.org/hwAddr: %v",
-					requestedContVethMac, err)
+		for _, r := range routes {
+			if r.IP.To4() == nil {
+				d.logger.WithField("route", r).Debug("Skipping non-IPv4 route")
+				continue
 			}
-
-			err = netlink.LinkSetHardwareAddr(contVeth, tmpContVethMAC)
-			if err != nil {
-				return fmt.Errorf("failed to set container veth MAC to %v as requested via cni.projectcalico.org/hwAddr: %v",
-					requestedContVethMac, err)
-			}
-
-			contVethMAC = tmpContVethMAC.String()
-			d.logger.Infof("successfully configured container veth MAC to %v as requested via cni.projectcalico.org/hwAddr",
-				contVethMAC)
-		} else {
-			contVethMAC = contVeth.Attrs().HardwareAddr.String()
-		}
-
-		d.logger.WithField("MAC", contVethMAC).Debug("Found MAC for container veth")
-
-		// At this point, the virtual ethernet pair has been created, and both ends have the right names.
-		// Both ends of the veth are still in the container's network namespace.
-
-		// Do the per-IP version set-up.  Add gateway routes etc.
-		if hasIPv4 {
-			// Add a connected route to a dummy next hop so that a default route can be set
-			gw := net.IPv4(169, 254, 1, 1)
-			gwNet := &net.IPNet{IP: gw, Mask: net.CIDRMask(32, 32)}
-			err := netlink.RouteAdd(
-				&netlink.Route{
-					LinkIndex: contVeth.Attrs().Index,
-					Scope:     netlink.SCOPE_LINK,
-					Dst:       gwNet,
-				},
-			)
-
-			if err != nil {
-				return fmt.Errorf("failed to add route inside the container: %v", err)
-			}
-
-			for _, r := range routes {
-				if r.IP.To4() == nil {
-					d.logger.WithField("route", r).Debug("Skipping non-IPv4 route")
-					continue
-				}
-				d.logger.WithField("route", r).Debug("Adding IPv4 route")
-				if err = ip.AddRoute(r, gw, contVeth); err != nil {
-					return fmt.Errorf("failed to add IPv4 route for %v via %v: %v", r, gw, err)
-				}
+			d.logger.WithField("route", r).Debug("Adding IPv4 route")
+			if err = ip.AddRoute(r, gw, contVeth); err != nil {
+				return "", "", fmt.Errorf("failed to add IPv4 route for %v via %v: %v", r, gw, err)
 			}
 		}
+	}
 
-		// Now add the IPs to the container side of the veth.
-		for _, addr := range result.IPs {
-			if err = netlink.AddrAdd(contVeth, &netlink.Addr{IPNet: &addr.Address}); err != nil {
-				return fmt.Errorf("failed to add IP addr to %q: %v", contVeth, err)
-			}
+	// Now add the IPs to the container side of the veth.
+	for _, addr := range result.IPs {
+		if err = netlink.AddrAdd(contVeth, &netlink.Addr{IPNet: &addr.Address}); err != nil {
+			return "", "", fmt.Errorf("failed to add IP addr to %q: %v", contVeth, err)
 		}
+	}
 
-		if err = d.configureContainerSysctls(hasIPv4, hasIPv6); err != nil {
-			return fmt.Errorf("error configuring sysctls for the container netns, error: %s", err)
-		}
-
-		return nil
-	})
-*/
+	if err = d.configureContainerSysctls(hasIPv4); err != nil {
+		return "", "", fmt.Errorf("error configuring sysctls for the container netns, error: %s", err)
+	}
 
 	if err != nil {
 		d.logger.Errorf("Error creating veth: %s", err)
 		return "", "", err
 	}
 
-	hostVeth, err := hostNlHandle.LinkByName(hostVethName)
+	hostVeth, err = hostNlHandle.LinkByName(hostVethName)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to lookup %q: %v", hostVethName, err)
 	}
@@ -354,105 +324,41 @@ func SetupRoutes(hostNlHandle *netlink.Handle, hostVeth netlink.Link, result *cn
 }
 
 // configureSysctls configures necessary sysctls required for the host side of the veth pair for IPv4 and/or IPv6.
-func (d *freebsdDataplane) configureSysctls(hostVethName string, hasIPv4, hasIPv6 bool) error {
-	var err error
-
+func (d *freebsdDataplane) configureSysctls(hasIPv4 bool) error {
 	if hasIPv4 {
-		// Enable routing to localhost.  This is required to allow for NAT to the local
-		// host.
-		err := writeProcSys(fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/route_localnet", hostVethName), "1")
+		// Enable IP forwarding of packets coming _from_ this interface.  For packets to
+		// be forwarded in both directions we need this flag to be set on the fabric-facing
+		// interface too (or for the global default to be set).
+		cmd := exec.Command("sysctl", "-w", "net.inet.ip.forwarding=1")
+		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("failed to set net.ipv4.conf.%s.route_localnet=1: %s", hostVethName, err)
+			return fmt.Errorf("failed to set net.inet.ip.forwarding=1:output: %s, err: %s", output, err)
 		}
-
-		// Normally, the kernel has a delay before responding to proxy ARP but we know
-		// that's not needed in a Calico network so we disable it.
-		if err = writeProcSys(fmt.Sprintf("/proc/sys/net/ipv4/neigh/%s/proxy_delay", hostVethName), "0"); err != nil {
-			d.logger.Warnf("failed to set net.ipv4.neigh.%s.proxy_delay=0: %s", hostVethName, err)
-		}
-
-		// Enable proxy ARP, this makes the host respond to all ARP requests with its own
-		// MAC. We install explicit routes into the containers network
-		// namespace and we use a link-local address for the gateway.  Turing on proxy ARP
-		// means that we don't need to assign the link local address explicitly to each
-		// host side of the veth, which is one fewer thing to maintain and one fewer
-		// thing we may clash over.
-		if err = writeProcSys(fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/proxy_arp", hostVethName), "1"); err != nil {
-			return fmt.Errorf("failed to set net.ipv4.conf.%s.proxy_arp=1: %s", hostVethName, err)
-		}
-
-		// Enable IP forwarding of packets coming _from_ this interface.  For packets to
-		// be forwarded in both directions we need this flag to be set on the fabric-facing
-		// interface too (or for the global default to be set).
-		if err = writeProcSys(fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/forwarding", hostVethName), "1"); err != nil {
-			return fmt.Errorf("failed to set net.ipv4.conf.%s.forwarding=1: %s", hostVethName, err)
-		}
-	}
-
-	if hasIPv6 {
-		// By default, the kernel does duplicate address detection for the IPv6 address. DAD delays use of the
-		// IP for up to a second and we don't need it because it's a point-to-point link.
-		if err := writeProcSys(fmt.Sprintf("/proc/sys/net/ipv6/conf/%s/accept_dad", hostVethName), "0"); err != nil {
-			return fmt.Errorf("failed to set net.ipv6.conf.%s.accept_dad=0: %s", hostVethName, err)
-		}
-
-		// Make sure ipv6 is enabled on the hostVeth interface in the host network namespace.
-		// Interfaces won't get a link local address without this sysctl set to 0.
-		if err = writeProcSys(fmt.Sprintf("/proc/sys/net/ipv6/conf/%s/disable_ipv6", hostVethName), "0"); err != nil {
-			return fmt.Errorf("failed to set net.ipv6.conf.%s.disable_ipv6=0: %s", hostVethName, err)
-		}
-
-		// Enable proxy NDP, similarly to proxy ARP, described above in IPv4 section.
-		if err = writeProcSys(fmt.Sprintf("/proc/sys/net/ipv6/conf/%s/proxy_ndp", hostVethName), "1"); err != nil {
-			return fmt.Errorf("failed to set net.ipv6.conf.%s.proxy_ndp=1: %s", hostVethName, err)
-		}
-
-		// Enable IP forwarding of packets coming _from_ this interface.  For packets to
-		// be forwarded in both directions we need this flag to be set on the fabric-facing
-		// interface too (or for the global default to be set).
-		if err = writeProcSys(fmt.Sprintf("/proc/sys/net/ipv6/conf/%s/forwarding", hostVethName), "1"); err != nil {
-			return fmt.Errorf("failed to set net.ipv6.conf.%s.forwarding=1: %s", hostVethName, err)
-		}
-	}
-
-	if err = writeProcSys(fmt.Sprintf("/proc/sys/net/ipv6/conf/%s/accept_ra", hostVethName), "0"); err != nil {
-		d.logger.Warnf("failed to set net.ipv6.conf.%s.accept_ra=0: %s", hostVethName, err)
 	}
 
 	return nil
 }
 
 // configureContainerSysctls configures necessary sysctls required inside the container netns.
-func (d *freebsdDataplane) configureContainerSysctls(hasIPv4, hasIPv6 bool) error {
-	// If an IPv4 address is assigned, then configure IPv4 sysctls.
+func (d *freebsdDataplane) configureContainerSysctls(hasIPv4 bool) error {
 	if hasIPv4 {
 		if d.allowIPForwarding {
 			d.logger.Info("Enabling IPv4 forwarding")
-			if err := writeProcSys("/proc/sys/net/ipv4/ip_forward", "1"); err != nil {
-				return err
+			cmd := exec.Command("sysctl", "-w", "net.inet.ip.forwarding=1")
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("failed to set net.inet.ip.forwarding=1:output: %s, err: %s", output, err)
 			}
 		} else {
 			d.logger.Info("Disabling IPv4 forwarding")
-			if err := writeProcSys("/proc/sys/net/ipv4/ip_forward", "0"); err != nil {
-				return err
+			cmd := exec.Command("sysctl", "-w", "net.inet.ip.forwarding=0")
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("failed to set net.inet.ip.forwarding=0:output: %s, err: %s", output, err)
 			}
 		}
 	}
 
-	// If an IPv6 address is assigned, then configure IPv6 sysctls.
-	if hasIPv6 {
-		if d.allowIPForwarding {
-			d.logger.Info("Enabling IPv6 forwarding")
-			if err := writeProcSys("/proc/sys/net/ipv6/conf/all/forwarding", "1"); err != nil {
-				return err
-			}
-		} else {
-			d.logger.Info("Disabling IPv6 forwarding")
-			if err := writeProcSys("/proc/sys/net/ipv6/conf/all/forwarding", "0"); err != nil {
-				return err
-			}
-		}
-	}
 	return nil
 }
 
