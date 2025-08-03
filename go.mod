@@ -54,7 +54,7 @@ require (
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/ginkgo/v2 v2.17.1
 	github.com/onsi/gomega v1.32.0
-	github.com/oss-fun/netlink v0.0.0-20250802092651-aea6d9d49fdd
+	github.com/oss-fun/netlink v0.0.0-20250803034943-31286e42d7a3
 	github.com/oss-fun/plugins v0.0.0-20250520090247-02642f48f98d
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/pkg/errors v0.9.1

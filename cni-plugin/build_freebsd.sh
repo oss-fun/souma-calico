@@ -1,6 +1,6 @@
 #!/bin/sh
 
-GOPRIVATE=github.com/oss-fun/netlink go get github.com/oss-fun/netlink@souma-dev
+GOPRIVATE=github.com/oss-fun/netlink go get github.com/oss-fun/netlink
 go mod tidy
 go mod vendor
 
