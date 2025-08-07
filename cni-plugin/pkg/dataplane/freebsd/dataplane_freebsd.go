@@ -22,12 +22,15 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+	"strconv"
+	"strings"
+	"regexp"
 	"time"
 
 	"purplekraken.com/pkg/gojail"
 	"github.com/containernetworking/cni/pkg/skel"
 	cniv1 "github.com/containernetworking/cni/pkg/types/100"
-	"github.com/oss-fun/plugins/pkg/ip"
+	//"github.com/oss-fun/plugins/pkg/ip"
 	"github.com/oss-fun/plugins/pkg/ns"
 	"github.com/sirupsen/logrus"
 	"github.com/oss-fun/netlink"
@@ -147,39 +150,44 @@ func (d *freebsdDataplane) DoNetworking(
 		return "", "", fmt.Errorf("failed to set %q up: %w", hostVethName, err)
 	}
 
-	contVeth, err := netlink.LinkByName(contVethName)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to lookup %q: %v", contVethName, err)
+	if err := exec.Command("jexec", strconv.Itoa(jid), "ifconfig", contVethName, "up").Run(); err != nil {
+		return "", "", fmt.Errorf("failed to set %q up in jail: %w", contVethName, err)
 	}
 
-	// Explicitly set the veth to UP state; the veth won't get a link local address unless it's set to UP state.
-	if err = netlink.LinkSetUp(contVeth); err != nil {
-		return "", "", fmt.Errorf("failed to set %q up: %w", contVethName, err)
-	}
-
-	// Check if there is an annotation requesting a specific fixed MAC address for the container Veth, otherwise
-	// use kernel-assigned MAC.
 	if requestedContVethMac, found := annotations["cni.projectcalico.org/hwAddr"]; found {
 		tmpContVethMAC, err := net.ParseMAC(requestedContVethMac)
 		if err != nil {
 			return "", "", fmt.Errorf("failed to parse MAC address %v provided via cni.projectcalico.org/hwAddr: %v",
 				requestedContVethMac, err)
 		}
-
-		err = netlink.LinkSetHardwareAddr(contVeth, tmpContVethMAC)
+		contVethMAC = tmpContVethMAC.String()
+		err = exec.Command("jexec", strconv.Itoa(jid), "ifconfig", contVethName, "link", contVethMAC).Run()
 		if err != nil {
 			return "", "", fmt.Errorf("failed to set container veth MAC to %v as requested via cni.projectcalico.org/hwAddr: %v",
 				requestedContVethMac, err)
 		}
-
-		contVethMAC = tmpContVethMAC.String()
 		d.logger.Infof("successfully configured container veth MAC to %v as requested via cni.projectcalico.org/hwAddr", contVethMAC)
 	} else {
-		contVethMAC = contVeth.Attrs().HardwareAddr.String()
+		out, err := exec.Command("jexec", strconv.Itoa(jid), "ifconfig", contVethName).Output()
+		if err != nil {
+			return "", "", fmt.Errorf("failed to run ifconfig: %w", err)
+		}
+		text := string(out)
+
+		find := regexp.MustCompile(`(?i)ether\s+([0-9a-f:]{17})`)
+		if match := find.FindStringSubmatch(text); match != nil {
+			contVethMAC = strings.ToLower(match[1])
+		}
 	}
 
 	d.logger.WithField("MAC", contVethMAC).Debug("Found MAC for container veth")
 
+
+	for _, addr := range result.IPs {
+		if err = exec.Command("jexec", strconv.Itoa(jid), "ifconfig", contVethName, "inet", addr.Address.String()).Run(); err != nil {
+			return "", "", fmt.Errorf("failed to add IP addr to %v: %v", contVethName, err)
+		}
+	}
 
 	// At this point, the virtual ethernet pair has been created, and both ends have the right names.
 	// Both ends of the veth are still in the container's network namespace.
@@ -188,15 +196,7 @@ func (d *freebsdDataplane) DoNetworking(
 	if hasIPv4 {
 		// Add a connected route to a dummy next hop so that a default route can be set
 		gw := net.IPv4(169, 254, 1, 1)
-		gwNet := &net.IPNet{IP: gw, Mask: net.CIDRMask(32, 32)}
-		err := netlink.RouteAdd(
-			&netlink.Route{
-				LinkIndex: contVeth.Attrs().Index,
-				Scope:     netlink.SCOPE_LINK,
-				Dst:       gwNet,
-			},
-		)
-
+		err := exec.Command("jexec", strconv.Itoa(jid), "route", "add", "-host", gw.String(), "-iface", contVethName).Run()
 		if err != nil {
 			return "", "", fmt.Errorf("failed to add route inside the container: %v", err)
 		}
@@ -207,16 +207,9 @@ func (d *freebsdDataplane) DoNetworking(
 				continue
 			}
 			d.logger.WithField("route", r).Debug("Adding IPv4 route")
-			if err = ip.AddRoute(r, gw, contVeth); err != nil {
+			if err = exec.Command("jexec", strconv.Itoa(jid), "route", "add", "-net", r.String(), gw.String()).Run(); err != nil {
 				return "", "", fmt.Errorf("failed to add IPv4 route for %v via %v: %v", r, gw, err)
 			}
-		}
-	}
-
-	// Now add the IPs to the container side of the veth.
-	for _, addr := range result.IPs {
-		if err = netlink.AddrAdd(contVeth, &netlink.Addr{IPNet: &addr.Address}); err != nil {
-			return "", "", fmt.Errorf("failed to add IP addr to %q: %v", contVeth, err)
 		}
 	}
 
