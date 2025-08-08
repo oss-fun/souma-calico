@@ -22,7 +22,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"time"
 
 	"github.com/containernetworking/cni/pkg/skel"
@@ -257,15 +256,6 @@ func cmdAdd(args *skel.CmdArgs) error {
 			MaxBlocksPerHost: maxBlocks,
 			Attrs:            attrs,
 			IntendedUse:      v3.IPPoolAllowedUseWorkload,
-		}
-		if runtime.GOOS == "windows" {
-			rsvdAttrWindows := &ipam.HostReservedAttr{
-				StartOfBlock: 3,
-				EndOfBlock:   1,
-				Handle:       ipam.WindowsReservedHandle,
-				Note:         "windows host rsvd",
-			}
-			assignArgs.HostReservedAttrIPv4s = rsvdAttrWindows
 		}
 		logger.WithField("assignArgs", assignArgs).Info("Auto assigning IP")
 		autoAssignWithLock := func(calicoClient client.Interface, ctx context.Context, assignArgs ipam.AutoAssignArgs) (*ipam.IPAMAssignments, *ipam.IPAMAssignments, error) {

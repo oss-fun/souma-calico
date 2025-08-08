@@ -30,7 +30,6 @@ import (
 	"purplekraken.com/pkg/gojail"
 	"github.com/containernetworking/cni/pkg/skel"
 	cniv1 "github.com/containernetworking/cni/pkg/types/100"
-	//"github.com/oss-fun/plugins/pkg/ip"
 	"github.com/oss-fun/plugins/pkg/ns"
 	"github.com/sirupsen/logrus"
 	"github.com/oss-fun/netlink"
@@ -136,7 +135,7 @@ func (d *freebsdDataplane) DoNetworking(
 	for _, addr := range result.IPs {
 		if addr.Address.IP.To4() != nil {
 			hasIPv4 = true
-			addr.Address.Mask = net.CIDRMask(24, 32)
+			addr.Address.Mask = net.CIDRMask(31, 32)
 		}
 	}
 
@@ -187,29 +186,21 @@ func (d *freebsdDataplane) DoNetworking(
 		if err = exec.Command("jexec", strconv.Itoa(jid), "ifconfig", contVethName, "inet", addr.Address.String()).Run(); err != nil {
 			return "", "", fmt.Errorf("failed to add IP addr to %v: %v", contVethName, err)
 		}
-	}
 
-	// At this point, the virtual ethernet pair has been created, and both ends have the right names.
-	// Both ends of the veth are still in the container's network namespace.
-
-	// Do the per-IP version set-up.  Add gateway routes etc.
-	if hasIPv4 {
-		// Add a connected route to a dummy next hop so that a default route can be set
-		gw := net.IPv4(169, 254, 1, 1)
-		err := exec.Command("jexec", strconv.Itoa(jid), "route", "add", "-host", gw.String(), "-iface", contVethName).Run()
-		if err != nil {
-			return "", "", fmt.Errorf("failed to add route inside the container: %v", err)
+		// addr.Addressの複製・反転
+		hostAddr := net.IPNet {
+			IP: flipLastBit(addr.Address.IP),
+			Mask: addr.Address.Mask,
+		}
+		// hostVethにIP割当
+		if err = netlink.AddrAdd(hostVeth, &netlink.Addr{IPNet: &hostAddr}); err != nil {
+			return "", "", fmt.Errorf("failed to add IP addr to %q: %v", hostVeth, err)
 		}
 
-		for _, r := range routes {
-			if r.IP.To4() == nil {
-				d.logger.WithField("route", r).Debug("Skipping non-IPv4 route")
-				continue
-			}
-			d.logger.WithField("route", r).Debug("Adding IPv4 route")
-			if err = exec.Command("jexec", strconv.Itoa(jid), "route", "add", "-net", r.String(), gw.String()).Run(); err != nil {
-				return "", "", fmt.Errorf("failed to add IPv4 route for %v via %v: %v", r, gw, err)
-			}
+		// routeに追加
+		err := exec.Command("jexec", strconv.Itoa(jid), "route", "add", "default", hostAddr.String()).Run()
+		if err != nil {
+			return "", "", fmt.Errorf("failed to add route inside the container: %v", err)
 		}
 	}
 
@@ -222,18 +213,22 @@ func (d *freebsdDataplane) DoNetworking(
 		return "", "", err
 	}
 
-	hostVeth, err = hostNlHandle.LinkByName(hostVethName)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to lookup %q: %v", hostVethName, err)
-	}
-
-	// Add the routes to host veth in the host namespace.
-	err = SetupRoutes(hostNlHandle, hostVeth, result)
-	if err != nil {
-		return "", "", fmt.Errorf("error adding host side routes for interface: %s, error: %s", hostVeth.Attrs().Name, err)
-	}
-
 	return hostVethName, contVethMAC, err
+}
+
+func flipLastBit(ip net.IP) net.IP {
+	ip = ip.To4()
+	if ip == nil {
+		return nil // IPv6や無効なIPに対処
+	}
+
+	flipped := make(net.IP, len(ip))
+	copy(flipped, ip)
+
+	// 最後のバイトの最下位ビット (LSB) を反転
+	flipped[3] ^= 1 // 0b00000001
+
+	return flipped
 }
 
 func disableDAD(contVethName string) error {
