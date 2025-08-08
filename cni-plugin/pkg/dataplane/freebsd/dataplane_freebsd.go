@@ -198,7 +198,7 @@ func (d *freebsdDataplane) DoNetworking(
 		}
 
 		// routeに追加
-		err := exec.Command("jexec", strconv.Itoa(jid), "route", "add", "default", hostAddr.String()).Run()
+		err := exec.Command("jexec", strconv.Itoa(jid), "route", "add", "default", hostAddr.IP.String()).Run()
 		if err != nil {
 			return "", "", fmt.Errorf("failed to add route inside the container: %v", err)
 		}
