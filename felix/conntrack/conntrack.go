@@ -15,7 +15,6 @@
 package conntrack
 
 import (
-	"bytes"
 	"io"
 	"net"
 	"os/exec"
@@ -78,45 +77,6 @@ type CmdIface interface {
 }
 
 func (c Conntrack) RemoveConntrackFlows(ipVersion uint8, ipAddr net.IP) {
-	var family string
-	switch ipVersion {
-	case 4:
-		family = "ipv4"
-	case 6:
-		family = "ipv6"
-	default:
-		log.WithField("version", ipVersion).Panic("Unknown IP version")
-	}
-	log.WithField("ip", ipAddr).Info("Removing conntrack flows")
-	for _, direction := range deleteDirections {
-		logCxt := log.WithFields(log.Fields{"ip": ipAddr, "direction": direction})
-		// Retry a few times because the conntrack command seems to fail at random.
-		for retry := 0; retry <= numRetries; retry += 1 {
-			cmd := c.newCmd("conntrack",
-				"--family", family,
-				"--delete", direction,
-				ipAddr.String())
-
-			// The conntrack tool generates quite a lot of output on stdout (one line per flow) so we
-			// only capture stderr (which is where it logs its errors).
-			var stderrBuf bytes.Buffer
-			cmd.SetStderr(&stderrBuf)
-			err := cmd.Run()
-			if err == nil {
-				logCxt.Debug("Successfully removed conntrack flows.")
-				break
-			}
-
-			if bytes.Contains(stderrBuf.Bytes(), []byte("0 flow entries")) {
-				// Success, there were no flows.
-				logCxt.Debug("IP wasn't in conntrack")
-				break
-			}
-			if retry == numRetries {
-				logCxt.WithError(err).WithField("output", stderrBuf.String()).Error("Failed to remove conntrack flows after retries.")
-			} else {
-				logCxt.WithError(err).WithField("output", stderrBuf.String()).Debug("Failed to remove conntrack flows, will retry...")
-			}
-		}
-	}
+	logCxt := log.WithFields(log.Fields{"Conntrack": c, "ipVersion": ipVersion, "ipAddr": ipAddr})
+	logCxt.Warn("RemoveConntrackFlows not implemeted")
 }

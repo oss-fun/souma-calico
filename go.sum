@@ -673,6 +673,10 @@ github.com/opencontainers/selinux v1.10.1 h1:09LIPVRP3uuZGQvgR+SgMSNBd1Eb3vlRbGq
 github.com/opencontainers/selinux v1.10.1/go.mod h1:2i0OySw99QjzBBQByd1Gr9gSjvuho1lHsJxIJ3gGbJI=
 github.com/oss-fun/netlink v0.0.0-20250324072711-caf436998bd0 h1:lDt9qHlbu4Wt9OwYJsAWpXyFYLYR+Ljd7eqan0hY4gU=
 github.com/oss-fun/netlink v0.0.0-20250324072711-caf436998bd0/go.mod h1:fnzXJP1h3N55cZcoN3qUSyXAdcqRRU8cjtTrM3WQ6W8=
+github.com/oss-fun/netlink v0.0.0-20250802101959-b0af3687fbf0 h1:sCx/ifq7q09dbLIV37EO1HSEKZBf55j9BO2dcpjWWmk=
+github.com/oss-fun/netlink v0.0.0-20250802101959-b0af3687fbf0/go.mod h1:LqJd8yWUAJrNWPdPQAMhjFLtoAKFI6ZxDp9XwsEZ1kc=
+github.com/oss-fun/netlink v0.0.0-20250803034943-31286e42d7a3 h1:pL28ahOsQoZVpY7U4lvcmjQX+/EjtGKLmVbQcUfouHU=
+github.com/oss-fun/netlink v0.0.0-20250803034943-31286e42d7a3/go.mod h1:LqJd8yWUAJrNWPdPQAMhjFLtoAKFI6ZxDp9XwsEZ1kc=
 github.com/oss-fun/plugins v0.0.0-20250520090247-02642f48f98d h1:nh/AKxdRNleaDEnLnKZq+WYWQ4ypVCGimTwy9eJwdiM=
 github.com/oss-fun/plugins v0.0.0-20250520090247-02642f48f98d/go.mod h1:pH2sQ43tuk2wX9fGfHyq75LuKJ+DxN8Cnz0Y2/XxoEw=
 github.com/oss-fun/vnet v0.0.0-20250315043324-63ed7f6e848a h1:YKCCKMC6RNrxOck/nVAURClHDSWwpcg4bruon2odZQ0=
