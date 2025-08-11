@@ -17,6 +17,7 @@ package ifacemonitor
 import (
 	"fmt"
 	"time"
+	"net"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/oss-fun/netlink"
@@ -81,17 +82,58 @@ func (nl *netlinkReal) LinkList() ([]netlink.Link, error) {
 }
 
 func (nl *netlinkReal) ListLocalRoutes(link netlink.Link, family int) ([]netlink.Route, error) {
-	h, err := nl.handleMgr.Handle()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get netlink handle: %w", err)
-	}
-	routeFilter := &netlink.Route{}
-	filterFlags := netlink.RT_FILTER_TABLE | netlink.RT_FILTER_TYPE
-	routeFilter.Table = UNIX_RT_TABLE_LOCAL
-	routeFilter.Type = UNIX_RTN_LOCAL
+	var ifaces []net.Interface
+	var err error
+
 	if link != nil {
-		filterFlags |= netlink.RT_FILTER_OIF
-		routeFilter.LinkIndex = link.Attrs().Index
+		// インターフェースが指定されている場合
+		iface, err := net.InterfaceByIndex(link.Attrs().Index)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get interface: %w", err)
+		}
+		ifaces = []net.Interface{*iface}
+	} else {
+		// 全インターフェース
+		ifaces, err = net.Interfaces()
+		if err != nil {
+			return nil, fmt.Errorf("failed to list interfaces: %w", err)
+		}
 	}
-	return h.RouteListFiltered(family, routeFilter, filterFlags)
+
+	var routes []netlink.Route
+
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			return nil, fmt.Errorf("failed to list addresses for %s: %w", iface.Name, err)
+		}
+
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+
+			// family フィルタ
+			if family == netlink.FAMILY_V4 && ipNet.IP.To4() == nil {
+				continue
+			}
+			if family == netlink.FAMILY_V6 && ipNet.IP.To4() != nil {
+				continue
+			}
+
+			// Linux の RTN_LOCAL 相当のルートを netlink.Route 型で構築
+			route := netlink.Route{
+				LinkIndex: iface.Index,
+				Scope:     netlink.SCOPE_HOST, // local は host scope
+				Dst:       &net.IPNet{IP: ipNet.IP, Mask: ipNet.Mask},
+				// Gw は nil（directly connected local addr）
+				Table: UNIX_RT_TABLE_LOCAL,
+				Type:  UNIX_RTN_LOCAL,
+			}
+			routes = append(routes, route)
+		}
+	}
+
+	return routes, nil
 }

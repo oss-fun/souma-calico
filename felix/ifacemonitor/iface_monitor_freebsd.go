@@ -372,7 +372,7 @@ func (m *InterfaceMonitor) storeAndNotifyLinkInner(ifaceExists bool, ifaceName s
 	// will allow us to secure a Host Endpoint interface _before_ it comes up, and so eliminate
 	// a small window of insecurity.
 	newAddrs := set.New[string]()
-	for _, family := range [2]int{unix.AF_INET, unix.AF_INET6} {
+	for _, family := range [1]int{unix.AF_INET} {
 		routes, err := m.netlinkStub.ListLocalRoutes(link, family)
 		if err != nil {
 			if errors.Is(err, unix.ENODEV) {
