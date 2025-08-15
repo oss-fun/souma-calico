@@ -24,6 +24,7 @@ import (
 	"reflect"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -296,8 +297,6 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 	ruleRenderer := rules.NewRenderer(config.RulesConfig)
 
 	epTagMapper := rules.NewEndpointTagMapper(config.RulesConfig.IpfwTagNonCaliEndpoint)
-
-	fmt.Printf("[souma-log] config.MTUIfacePattern: %v\n", config.MTUIfacePattern)
 
 	// Auto-detect host MTU.
 	hostMTU, err := findHostMTU(config.MTUIfacePattern)
@@ -811,6 +810,8 @@ func (d *InternalDataplane) monitorHostMTU() {
 // once at start of day before starting the main loop.  The actual ipfw programming is deferred
 // to the main loop.
 func (d *InternalDataplane) doStaticDataplaneConfig() {
+	fmt.Printf("souma-log: doStaticDataplaneConfig")
+
 	// Check/configure global kernel parameters.
 	d.configureKernel()
 
@@ -1124,6 +1125,7 @@ func (d *InternalDataplane) apply() {
 		}
 		d.reportHealth()
 	}
+	d.reportHealth()
 
 	if d.forceRouteRefresh {
 		// Refresh timer popped.
@@ -1153,7 +1155,6 @@ func (d *InternalDataplane) apply() {
 	for _, ipfwTable := range d.ipfwTable {
 		ipfwTableWG.Add(1)
 		go func(ipfwTable common.IpfwTableDataplane) {
-			fmt.Printf("[souma-log] ApplyUpdates呼び出し\n")
 			ipfwTable.ApplyUpdates()
 			d.reportHealth()
 			ipfwTableWG.Done()
@@ -1191,6 +1192,54 @@ func (d *InternalDataplane) apply() {
 			rulesWG.Done()
 		}(r)
 	}
+	// Wait for the IP sets update to finish.  We can't update iptables until it has.
+	ipfwTableWG.Wait()
+
+	// Update iptables, this should sever any references to now-unused IP sets.
+	var reschedDelayMutex sync.Mutex
+	var reschedDelay time.Duration
+	var ipfwWG sync.WaitGroup
+	for _, t := range d.allIpfwRuleSet {
+		ipfwWG.Add(1)
+		go func(t *ipfw.RuleSet) {
+			tableReschedAfter := t.Apply()
+
+			reschedDelayMutex.Lock()
+			defer reschedDelayMutex.Unlock()
+			if tableReschedAfter != 0 && (reschedDelay == 0 || tableReschedAfter < reschedDelay) {
+				reschedDelay = tableReschedAfter
+			}
+			d.reportHealth()
+			ipfwWG.Done()
+		}(t)
+	}
+	ipfwWG.Wait()
+
+	// Now clean up any left-over IP sets.
+	var ipfwTableNeedsReschedule atomic.Bool
+	for _, ipfwTable := range d.ipfwTable {
+		ipfwTableWG.Add(1)
+		go func(s common.IpfwTableDataplane) {
+			defer ipfwTableWG.Done()
+			reschedule := s.ApplyDeletions()
+			if reschedule {
+				ipfwTableNeedsReschedule.Store(true)
+			}
+			d.reportHealth()
+		}(ipfwTable)
+	}
+	ipfwTableWG.Wait()
+	if ipfwTableNeedsReschedule.Load() {
+		if reschedDelay == 0 || reschedDelay > 100*time.Millisecond {
+			reschedDelay = 100 * time.Millisecond
+		}
+	}
+
+	// Wait for the route updates to finish.
+	routesWG.Wait()
+
+	// Wait for the rule updates to finish.
+	rulesWG.Wait()
 
 	// And publish and status updates.
 	d.endpointStatusCombiner.Apply()
@@ -1206,6 +1255,18 @@ func (d *InternalDataplane) apply() {
 		}
 		// Nil out our copy of the channel to record that the timer is inactive.
 		d.reschedC = nil
+	}
+	if reschedDelay != 0 {
+		// We need to reschedule.
+		log.WithField("delay", reschedDelay).Debug("Asked to reschedule.")
+		if d.reschedTimer == nil {
+			// First time, create the timer.
+			d.reschedTimer = time.NewTimer(reschedDelay)
+		} else {
+			// Have an existing timer, reset it.
+			d.reschedTimer.Reset(reschedDelay)
+		}
+		d.reschedC = d.reschedTimer.C
 	}
 }
 

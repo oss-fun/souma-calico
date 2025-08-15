@@ -45,6 +45,8 @@ func StartDataplaneDriver(configParams *config.Config,
 	configChangedRestartCallback func(),
 	fatalErrorCallback func(error)) (DataplaneDriver, *exec.Cmd) {
 
+	fmt.Printf("souma-log: StartDataplaneDriver")
+
 	if !configParams.IsLeader() {
 		// Return an inactive dataplane, since we're not the leader.
 		log.Info("Not the leader, using an inactive dataplane")
@@ -219,6 +221,7 @@ func StartDataplaneDriver(configParams *config.Config,
 		}
 
 		intDP := intdataplane.NewIntDataplaneDriver(dpConfig)
+		log.Debug("souma-log: int.DP.Start()")
 		intDP.Start()
 
 		return intDP, nil

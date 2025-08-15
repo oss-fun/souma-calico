@@ -16,7 +16,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/projectcalico/calico/felix/environment"
-	"github.com/projectcalico/calico/felix/iptables/cmdshim"
+	"github.com/projectcalico/calico/felix/ipfw/cmdshim"
 	"github.com/projectcalico/calico/felix/logutils"
 	logutilslc "github.com/projectcalico/calico/libcalico-go/lib/logutils"
 	"github.com/projectcalico/calico/libcalico-go/lib/set"
@@ -288,7 +288,7 @@ func (t *RuleSet) loadDataplaneState() {
 	t.featureDetector.RefreshFeatures()
 
 	// Load the hashes from the dataplane.
-	t.logCxt.Debug("Loading current iptables state and checking it is correct.")
+	t.logCxt.Debug("Loading current ipfw state and checking it is correct.")
 	t.opReporter.RecordOperation(fmt.Sprintf("resync-%v-v%d", t.Name, t.IPVersion))
 
 	t.lastReadTime = t.timeNow()
@@ -351,7 +351,7 @@ func (t *RuleSet) loadDataplaneState() {
 	}
 
 	// Now scan for chains that shouldn't be there and mark for deletion.
-	t.logCxt.Debug("Scanning for unexpected iptables chains")
+	t.logCxt.Debug("Scanning for unexpected ipfw chains")
 	for chainName, dataplaneHashes := range dataplaneHashes {
 		logCxt := t.logCxt.WithField("chainName", chainName)
 		if t.dirtyChains.Contains(chainName) || t.dirtyAppend.Contains(chainName) {
@@ -383,7 +383,7 @@ func (t *RuleSet) loadDataplaneState() {
 		t.dirtyChains.Add(chainName)
 	}
 
-	t.logCxt.Debug("Finished loading iptables state")
+	t.logCxt.Debug("Finished loading ipfw state")
 	t.chainToDataplaneHashes = dataplaneHashes
 	t.chainToFullRules = dataplaneRules
 	t.inSyncWithDataPlane = true
@@ -457,7 +457,7 @@ func (t *RuleSet) attemptToGetHashesAndRulesFromDataplane() (hashes map[string][
 		saveDuration := t.timeNow().Sub(startTime)
 		t.peakIpfwSaveTime = t.peakIpfwSaveTime * 99 / 100
 		if saveDuration > t.peakIpfwSaveTime {
-			log.WithField("duration", saveDuration).Debug("Updating iptables-save peak duration.")
+			log.WithField("duration", saveDuration).Debug("Updating ipfw-save peak duration.")
 			t.peakIpfwSaveTime = saveDuration
 		}
 	}()
@@ -496,7 +496,7 @@ func (t *RuleSet) attemptToGetHashesAndRulesFromDataplane() (hashes map[string][
 	}
 	waitErr := cmd.Wait()
 	if waitErr != nil {
-		log.WithError(waitErr).Warn("iptables save failed")
+		log.WithError(waitErr).Warn("ipfw save failed")
 		if err == nil {
 			err = waitErr
 		}
@@ -526,7 +526,7 @@ func (t *RuleSet) Apply() (rescheduleAfter time.Duration) {
 			log.WithFields(log.Fields{
 				"applyTime":      time.Since(now),
 				"reasonForApply": t.reason,
-			}).Info("Updating iptables took >1s")
+			}).Info("Updating ipfw took >1s")
 		}
 	}()
 	lastReadToNow := now.Sub(t.lastReadTime)
@@ -559,22 +559,22 @@ func (t *RuleSet) Apply() (rescheduleAfter time.Duration) {
 		if err := t.applyUpdates(); err != nil {
 			if retries > 0 {
 				retries--
-				t.logCxt.WithError(err).Warn("Failed to program iptables, will retry")
+				t.logCxt.WithError(err).Warn("Failed to program ipfw, will retry")
 				t.timeSleep(backoffTime)
 				backoffTime *= 2
 				t.logCxt.WithError(err).Warn("Retrying...")
 				failedAtLeastOnce = true
 				continue
 			} else {
-				t.logCxt.WithError(err).Error("Failed to program iptables, loading diags before panic.")
+				t.logCxt.WithError(err).Error("Failed to program ipfw, loading diags before panic.")
 				cmd := t.newCmd(t.ipfwCmd)
 				output, err2 := cmd.Output()
 				if err2 != nil {
-					t.logCxt.WithError(err2).Error("Failed to load iptables state")
+					t.logCxt.WithError(err2).Error("Failed to load ipfw state")
 				} else {
-					t.logCxt.WithField("iptablesState", string(output)).Error("Current state of iptables")
+					t.logCxt.WithField("ipfwState", string(output)).Error("Current state of ipfw")
 				}
-				t.logCxt.WithError(err).Panic("Failed to program iptables, giving up after retries")
+				t.logCxt.WithError(err).Panic("Failed to program ipfw, giving up after retries")
 			}
 		}
 		if failedAtLeastOnce {
@@ -602,6 +602,202 @@ func (t *RuleSet) Apply() (rescheduleAfter time.Duration) {
 }
 
 func (t *RuleSet) applyUpdates() error {
+	// If needed, detect the dataplane features.
+	features := t.featureDetector.GetFeatures()
+
+	// Build up the ipfw-restore input in an in-memory buffer.  This allows us to log out the exact input after
+	// a failure, which has proven to be a very useful diagnostic tool.
+	buf := &t.restoreInputBuffer
+	buf.Reset() // Defensive.
+
+	// ipfw-restore commands live in per-table transactions.
+	buf.StartTransaction(t.Name)
+
+	// Make a pass over the dirty chains and generate a forward reference for any that we're about to update.
+	// Writing a forward reference ensures that the chain exists and that it is empty.
+	t.dirtyChains.Iter(func(chainName string) error {
+		chainNeedsToBeFlushed := false
+		if _, present := t.desiredStateOfChain(chainName); !present {
+			// About to delete this chain, flush it first to sever dependencies.
+			chainNeedsToBeFlushed = true
+		} else if _, ok := t.chainToDataplaneHashes[chainName]; !ok {
+			// Chain doesn't exist in dataplane, mark it for creation.
+			chainNeedsToBeFlushed = true
+		}
+		if chainNeedsToBeFlushed {
+			buf.WriteForwardReference(chainName)
+		}
+		return nil
+	})
+
+	// Make a second pass over the dirty chains.  This time, we write out the rule changes.
+	newHashes := map[string][]string{}
+	t.dirtyChains.Iter(func(chainName string) error {
+		if chain, ok := t.desiredStateOfChain(chainName); ok {
+			// Chain update or creation.  Scan the chain against its previous hashes
+			// and replace/append/delete as appropriate.
+			var previousHashes []string
+			// In ipfw legacy mode, we compare the rules one by one and apply deltas rule by rule.
+			previousHashes = t.chainToDataplaneHashes[chainName]
+
+			currentHashes := chain.RuleHashes(features)
+			newHashes[chainName] = currentHashes
+			for i := 0; i < len(previousHashes) || i < len(currentHashes); i++ {
+				var line string
+				if i < len(previousHashes) && i < len(currentHashes) {
+					// RenderReplace not supported
+				} else if i < len(previousHashes) {
+					// renderDeleteByIndexLine not supported
+				} else {
+					// currentHashes was longer.  Append.
+					prefixFrag := t.commentFrag(currentHashes[i])
+					line = chain.Rules[i].RenderAppend(*t.chainNameToChain[chainName], prefixFrag)
+				}
+				buf.WriteLine(line)
+			}
+		}
+		return nil // Delay clearing the set until we've programmed ipfw.
+	})
+
+	// Make a copy of our full rules map and keep track of all changes made while processing dirtyInsertAppend.
+	// When we've successfully updated ipfw, we'll update our cache of chainToFullRules with this map.
+	newChainToFullRules := map[string][]string{}
+	for chain, rules := range t.chainToFullRules {
+		newChainToFullRules[chain] = make([]string, len(rules))
+		copy(newChainToFullRules[chain], rules)
+	}
+
+	// Now calculate ipfw updates for our inserted and appended rules, which are used to hook top-level chains.
+	var deleteRenderingErr error
+	t.dirtyAppend.Iter(func(chainName string) error {
+		previousHashes := t.chainToDataplaneHashes[chainName]
+		newRules := newChainToFullRules[chainName]
+
+		// Calculate the hashes for our inserted and appended rules.
+		newChainHashes, newInsertedRuleHashes, newAppendedRuleHashes := t.expectedHashesForInsertAppendChain(
+			chainName, numEmptyStrings(previousHashes))
+
+		if reflect.DeepEqual(newChainHashes, previousHashes) {
+			// Chain is in sync, skip to next one.
+			return nil
+		}
+
+		// Go over our slice of "new" rules and create a copy of the slice with just the rules we didn't empty out.
+		copyOfNewRules := []string{}
+		for _, rule := range newRules {
+			if rule != "" {
+				copyOfNewRules = append(copyOfNewRules, rule)
+			}
+		}
+		newRules = copyOfNewRules
+		rules := t.chainToInsertedRules[chainName]
+		insertRuleLines := make([]string, len(rules))
+
+		// Add inserted rules if there is any
+		if len(rules) > 0 {
+			t.logCxt.Debug("Rendering append rules.")
+			for i := 0; i < len(rules); i++ {
+				prefixFrag := t.commentFrag(newInsertedRuleHashes[i])
+				line := rules[i].RenderAppend(*t.chainNameToChain[chainName], prefixFrag)
+				buf.WriteLine(line)
+				insertRuleLines[i] = line
+			}
+			newRules = append(newRules, insertRuleLines...)
+		}
+
+		// Add appended rules if there is any
+		rules = t.chainToAppendedRules[chainName]
+		appendRuleLines := make([]string, len(rules))
+
+		if len(rules) > 0 {
+			t.logCxt.Debug("Rendering specific append rules.")
+			for i := 0; i < len(rules); i++ {
+				prefixFrag := t.commentFrag(newAppendedRuleHashes[i])
+				line := rules[i].RenderAppend(*t.chainNameToChain[chainName], prefixFrag)
+				buf.WriteLine(line)
+				appendRuleLines[i] = line
+			}
+			newRules = append(newRules, appendRuleLines...)
+		}
+
+		newHashes[chainName] = newChainHashes
+		newChainToFullRules[chainName] = newRules
+
+		return nil // Delay clearing the set until we've programmed ipfw.
+	})
+	// If rendering a delete by line number reached an unexpected state, error out so applyUpdates() can be retried.
+	if deleteRenderingErr != nil {
+		return deleteRenderingErr
+	}
+
+	// Do deletions at the end.  This ensures that we don't try to delete any chains that
+	// are still referenced (because we'll have removed the references in the modify pass
+	// above).  Note: if a chain is being deleted at the same time as a chain that it refers to
+	// then we'll issue a create+flush instruction in the very first pass, which will sever the
+	// references.
+	t.dirtyChains.Iter(func(chainName string) error {
+		if _, ok := t.desiredStateOfChain(chainName); !ok {
+			// Chain deletion
+			buf.WriteLine(fmt.Sprintf("--delete-chain %s", chainName))
+			newHashes[chainName] = nil
+		}
+		return nil // Delay clearing the set until we've programmed ipfw.
+	})
+
+	buf.EndTransaction()
+
+	if buf.Empty() {
+		t.logCxt.Debug("Update ended up being no-op, skipping call to ip(6)tables-restore.")
+	} else {
+		// Get the contents of the buffer ready to send to ipfw-restore.  Warning: for perf, this is directly
+		// accessing the buffer's internal array; don't touch the buffer after this point.
+		t.opReporter.RecordOperation(fmt.Sprintf("update-%v-v%d", t.Name, t.IPVersion))
+
+		fmt.Printf("[souma-log]: buf=%v\n", buf)
+		if err := t.execIpfwRestore(buf); err != nil {
+			return fmt.Errorf("writing out buffer: %w", err)
+		}
+
+		t.lastWriteTime = t.timeNow()
+		t.postWriteInterval = t.initialPostWriteInterval
+	}
+
+	if t.postWriteInterval != 0 {
+		// If ipfw-save/restore is taking a long time (as measured by
+		// the peakIpfwX fields), make sure that we don't try to
+		// recheck the ipfw state too soon.
+		dynamicMinPostWriteInterval := (t.peakIpfwSaveTime + t.peakIpfwRestoreTime) * 2
+		if t.postWriteInterval < dynamicMinPostWriteInterval {
+			log.WithFields(log.Fields{
+				"dynamicMin":  dynamicMinPostWriteInterval,
+				"peakSave":    t.peakIpfwSaveTime,
+				"peakRestore": t.peakIpfwRestoreTime,
+			}).Debug(
+				"Post write interval shorter than time to read/write ipfw, applying dynamic minimum.")
+			t.postWriteInterval = dynamicMinPostWriteInterval
+		}
+	}
+
+	// Now we've successfully updated ipfw, clear the dirty sets.  We do this even if we
+	// found there was nothing to do above, since we may have found out that a dirty chain
+	// was actually a no-op update.
+	t.dirtyChains = set.New[string]()
+	t.dirtyAppend = set.New[string]()
+
+	// Store off the updates.
+	for chainName, hashes := range newHashes {
+		if hashes == nil {
+			delete(t.chainToDataplaneHashes, chainName)
+		} else {
+			t.chainToDataplaneHashes[chainName] = hashes
+		}
+	}
+	t.chainToFullRules = newChainToFullRules
+
+	return nil
+}
+
+func (r *RuleSet) execIpfwRestore(buf *RestoreInputBuilder) error {
 	return fmt.Errorf("not Implement")
 }
 
@@ -658,7 +854,7 @@ func (t *RuleSet) UpdateChain(chain *Chain) {
 
 		// Defensive: make sure we re-read the dataplane state before we make updates.  While the
 		// code was originally designed not to need this, we found that other users of
-		// iptables-restore can still clobber our updates so it's safest to re-read the state before
+		// ipfw-restore can still clobber our updates so it's safest to re-read the state before
 		// each write.
 		t.InvalidateDataplaneCache("chain update")
 	}
