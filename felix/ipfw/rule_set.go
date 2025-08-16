@@ -463,7 +463,7 @@ func (t *RuleSet) attemptToGetHashesAndRulesFromDataplane() (hashes map[string][
 	}()
 
 	t.logCxt.Debugf("Starting %s", t.ipfwCmd)
-	cmd := t.newCmd(t.ipfwCmd, "-t", t.Name)
+	cmd := t.newCmd(t.ipfwCmd, "list")
 	countNumSaveCalls.Inc()
 
 	stdout, err := cmd.StdoutPipe()
@@ -505,7 +505,10 @@ func (t *RuleSet) attemptToGetHashesAndRulesFromDataplane() (hashes map[string][
 }
 
 func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]string, rules map[string][]string, err error) {
-	return nil, nil, fmt.Errorf("not Implement")
+	hashes = make(map[string][]string)
+	rules = make(map[string][]string)
+	err = nil
+	return
 }
 
 func (t *RuleSet) InvalidateDataplaneCache(reason string) {
@@ -651,7 +654,12 @@ func (t *RuleSet) applyUpdates() error {
 				} else {
 					// currentHashes was longer.  Append.
 					prefixFrag := t.commentFrag(currentHashes[i])
-					line = chain.Rules[i].RenderAppend(*t.chainNameToChain[chainName], prefixFrag)
+					chainPtr, ok := t.chainNameToChain[chainName]
+					if !ok || chainPtr == nil {
+						t.logCxt.WithField("chainName", chainName).Error("chainName not found or nil in chainNameToChain")
+						continue
+					}
+					line = chain.Rules[i].RenderAppend(*chainPtr, prefixFrag)
 				}
 				buf.WriteLine(line)
 			}
@@ -698,7 +706,12 @@ func (t *RuleSet) applyUpdates() error {
 			t.logCxt.Debug("Rendering append rules.")
 			for i := 0; i < len(rules); i++ {
 				prefixFrag := t.commentFrag(newInsertedRuleHashes[i])
-				line := rules[i].RenderAppend(*t.chainNameToChain[chainName], prefixFrag)
+				chainPtr, ok := t.chainNameToChain[chainName]
+				if !ok || chainPtr == nil {
+					t.logCxt.WithField("chainName", chainName).Error("chainName not found or nil in chainNameToChain")
+					continue
+				}
+				line := rules[i].RenderAppend(*chainPtr, prefixFrag)
 				buf.WriteLine(line)
 				insertRuleLines[i] = line
 			}
@@ -713,7 +726,12 @@ func (t *RuleSet) applyUpdates() error {
 			t.logCxt.Debug("Rendering specific append rules.")
 			for i := 0; i < len(rules); i++ {
 				prefixFrag := t.commentFrag(newAppendedRuleHashes[i])
-				line := rules[i].RenderAppend(*t.chainNameToChain[chainName], prefixFrag)
+				chainPtr, ok := t.chainNameToChain[chainName]
+				if !ok || chainPtr == nil {
+					t.logCxt.WithField("chainName", chainName).Error("chainName not found or nil in chainNameToChain")
+					continue
+				}
+				line := rules[i].RenderAppend(*chainPtr, prefixFrag)
 				buf.WriteLine(line)
 				appendRuleLines[i] = line
 			}
@@ -918,7 +936,11 @@ func (r RuleSet) GetChainNum(name string) uint16 {
 }
 
 func CalculateRuleHashes(chainName string, rules []Rule, features *environment.Features) []string {
-	return nil
+	chain := Chain{
+		Name: chainName,
+		Rules: rules,
+	}
+	return (&chain).RuleHashes(features)
 }
 
 func numEmptyStrings(strs []string) int {
