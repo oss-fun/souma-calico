@@ -3,6 +3,8 @@
 package ipfw
 
 import (
+	"fmt"
+	"os"
 	"crypto/sha256"
 	"encoding/base64"
 	"strings"
@@ -54,6 +56,9 @@ func (r Rule) renderInner(fragments []string, prefixFragment string) string {
 	matchFragment := r.Match.Render()
 	if matchFragment != "" {
 		fragments = append(fragments, matchFragment)
+	}
+	for _, c := range r.Comment {
+		fragments = append(fragments, fmt.Sprintf("// %s", c))
 	}
 	return strings.Join(fragments, " ")
 }
@@ -139,4 +144,25 @@ func (c *Chain) IpfwTableNames() (ipfwTableNames []string) {
 		ipfwTableNames = append(ipfwTableNames, rule.Match.TableNames()...)
 	}
 	return
+}
+
+func RulesToRestoreFile(rules []Rule, path string) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return fmt.Errorf("OpenFile failed: %v", err)
+	}
+	defer file.Close()
+
+	_, err = file.Write([]byte("#!/bin/sh\n"))
+	if err != nil {
+		return fmt.Errorf("Write failed: %v", err)
+	}
+
+	for _, r := range rules {
+		_, err = file.Write([]byte(fmt.Sprintf("%s\n", r.RenderRaw(""))))
+		if err != nil {
+			return fmt.Errorf("Write Rule(%s) failed: %v", r.Number, err)
+		}
+	}
+	return nil
 }

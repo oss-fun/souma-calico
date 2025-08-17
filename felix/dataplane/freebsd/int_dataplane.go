@@ -821,6 +821,8 @@ func (d *InternalDataplane) doStaticDataplaneConfig() {
 }
 
 func (d *InternalDataplane) setUpIpfwNormal() {
+	_ = setUpIptablesCompatible();
+
 	for _, t := range d.allIpfwRuleSet {
 		filterChains := d.ruleRenderer.StaticFilterTableChains(t.IPVersion)
 		t.UpdateChains(filterChains)
@@ -837,6 +839,86 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 		// Include rules which should be appended to the filter table forward chain.
 		t.AppendRules("FORWARD", d.ruleRenderer.StaticFilterForwardAppendRules())
 	}
+}
+
+
+const (
+	IN_ENTRY = 1
+	OUT_ENTRY = 2
+	FOR_ENTRY = 3
+	END_ENTRY = 4
+	IN_RULE = 10
+	IN_END = 19
+	OUT_RULE = 20
+	OUT_END = 29
+	FOR_RULE = 30
+	FOR_END = 39
+	END_RULE = 65534
+
+	RESTORE_FILE = "/tmp/ipfw_restore.sh"
+)
+
+func setUpIptablesCompatible() error {
+	firstRule := []ipfw.Rule {
+		ipfw.Rule{
+			Number: IN_ENTRY,
+			Action: ipfw.CallAction{RuleNumber: IN_RULE},
+			Match: ipfw.Match().NotSourceNet("me").DestNet("me").PacketDirection("in"),
+		},
+		ipfw.Rule{
+			Number: OUT_ENTRY,
+			Action: ipfw.CallAction{RuleNumber: OUT_RULE},
+			Match: ipfw.Match().SourceNet("me").NotDestNet("me").PacketDirection("out"),
+		},
+		ipfw.Rule{
+			Number: FOR_ENTRY,
+			Action: ipfw.CallAction{RuleNumber: FOR_RULE},
+			Match: ipfw.Match().NotSourceNet("me").NotDestNet("me"),
+		},
+		ipfw.Rule{
+			Number: END_ENTRY,
+			Action: ipfw.SkiptoAction{RuleNumber: END_RULE},
+			Match: ipfw.Match().SourceNet("any").DestNet("any"),
+		},
+		ipfw.Rule{
+			Number: IN_RULE,
+			Action: ipfw.CountAction{},
+			Comment: []string{"in packet"},
+		},
+		ipfw.Rule{
+			Number: IN_END,
+			Action: ipfw.SkiptoAction{RuleNumber: END_RULE},
+			Match: ipfw.Match().SourceNet("any").DestNet("any"),
+		},
+		ipfw.Rule{
+			Number: OUT_RULE,
+			Action: ipfw.CountAction{},
+			Comment: []string{"out packet"},
+		},
+		ipfw.Rule{
+			Number: OUT_END,
+			Action: ipfw.SkiptoAction{RuleNumber: END_RULE},
+			Match: ipfw.Match().SourceNet("any").DestNet("any"),
+		},
+		ipfw.Rule{
+			Number: FOR_RULE,
+			Action: ipfw.CountAction{},
+			Comment: []string{"forward packet"},
+		},
+		ipfw.Rule{
+			Number: FOR_END,
+			Action: ipfw.SkiptoAction{RuleNumber: END_RULE},
+			Match: ipfw.Match().SourceNet("any").DestNet("any"),
+		},
+	}
+
+	if err := ipfw.RulesToRestoreFile(firstRule, RESTORE_FILE); err != nil {
+		return fmt.Errorf("RulesToRestoreFile failed: %v", err)
+	}
+	if err := exec.Command(RESTORE_FILE).Run(); err != nil {
+		return fmt.Errorf("exec.Command.Run Failed: %v", err)
+	}
+	return nil
 }
 
 func stringToProtocol(protocol string) (labelindex.IpfwTablePortProtocol, error) {
