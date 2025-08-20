@@ -8,6 +8,7 @@ import (
 	"sync"
 	"strings"
 	"reflect"
+	"os"
 	"os/exec"
 	"time"
 	"io"
@@ -790,7 +791,6 @@ func (t *RuleSet) applyUpdates() error {
 		// accessing the buffer's internal array; don't touch the buffer after this point.
 		t.opReporter.RecordOperation(fmt.Sprintf("update-%v-v%d", t.Name, t.IPVersion))
 
-		fmt.Printf("[souma-log]: buf=%v\n", buf)
 		if err := t.execIpfwRestore(buf); err != nil {
 			return fmt.Errorf("writing out buffer: %w", err)
 		}
@@ -834,8 +834,27 @@ func (t *RuleSet) applyUpdates() error {
 	return nil
 }
 
+const (
+	RESTORE_DIR = "/tmp/calico/"
+	RESTORE_IPFW = RESTORE_DIR+"ipfw_rules"
+)
+
+var countIpfwRestore int = 0
+
 func (r *RuleSet) execIpfwRestore(buf *RestoreInputBuilder) error {
-	return fmt.Errorf("not Implement")
+	if err := os.MkdirAll(RESTORE_DIR, 0755); err != nil {
+		return fmt.Errorf("MkdirAll failed: %v", err)
+	}
+
+	input := buf.buf.Bytes()
+
+	path := fmt.Sprintf("%s%d.sh",RESTORE_IPFW, countIpfwRestore)
+	if err := BytesToRestoreFile(input, path); err != nil {
+		return fmt.Errorf("BytesToRestoreFile failed: %v", err)
+	}
+
+	countIpfwRestore++
+	return nil
 }
 
 func (t *RuleSet) InsertOrAppendRules(chainName string, rules []Rule) {

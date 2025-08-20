@@ -74,9 +74,6 @@ func (b *RestoreInputBuilder) EndTransaction() {
 	if b.currentTableName == "" {
 		log.Panic("EndTransaction() called without active transaction.")
 	}
-	if b.txnOpenerWritten {
-		b.writeFormattedLine("COMMIT")
-	}
 	b.currentTableName = ""
 }
 
@@ -99,7 +96,6 @@ func (b *RestoreInputBuilder) maybeWriteTransactionOpener() {
 		log.Panic("maybeWriteTransactionOpener() called without active transaction.")
 	}
 	if !b.txnOpenerWritten {
-		b.writeFormattedLine("*%s", b.currentTableName)
 		b.txnOpenerWritten = true
 	}
 }

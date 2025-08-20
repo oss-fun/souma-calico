@@ -44,9 +44,6 @@ func (r Rule) RenderAppend(chain Chain, prefixFragment string) string {
 }
 
 func (r Rule) renderInner(fragments []string, prefixFragment string) string {
-	if prefixFragment != "" {
-		fragments = append(fragments, prefixFragment)
-	}
 	if r.Action != nil {
 		actionFragment := r.Action.String()
 		if actionFragment != "" {
@@ -56,9 +53,18 @@ func (r Rule) renderInner(fragments []string, prefixFragment string) string {
 	matchFragment := r.Match.Render()
 	if matchFragment != "" {
 		fragments = append(fragments, matchFragment)
+	} else {
+		allPacketMatch := Match().SourceNet("any").DestNet("any").Render()
+		fragments = append(fragments, allPacketMatch)
 	}
-	for _, c := range r.Comment {
-		fragments = append(fragments, fmt.Sprintf("// %s", c))
+	if prefixFragment != "" {
+		fragments = append(fragments, prefixFragment)
+	}
+	if len(r.Comment) > 0 {
+		for _, c := range r.Comment {
+			fmt.Printf("[Souma-log] Comment: %s\n",c)
+			fragments = append(fragments, fmt.Sprintf("// %s", c))
+		}
 	}
 	return strings.Join(fragments, " ")
 }
@@ -166,3 +172,23 @@ func RulesToRestoreFile(rules []Rule, path string) error {
 	}
 	return nil
 }
+
+func BytesToRestoreFile(rules []byte, path string) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return fmt.Errorf("OpenFile failed: %v", err)
+	}
+	defer file.Close()
+
+	_, err = file.Write([]byte("#!/bin/sh\n"))
+	if err != nil {
+		return fmt.Errorf("Write shell header failed: %v", err)
+	}
+
+	_, err = file.Write(rules)
+	if err != nil {
+		return fmt.Errorf("Write rules fialed: %v", err)
+	}
+	return nil
+}
+
