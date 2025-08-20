@@ -337,12 +337,9 @@ var unusedBitsInBPFMode = map[string]bool{
 	"ipfwMarkNonCaliEndpoint": true,
 }
 
-func (c *Config) validate() {
-}
-
+// Rendererを作成
 func NewRenderer(config Config) RuleRenderer {
 	log.WithField("config", config).Info("Creating rule renderer.")
-	config.validate()
 
 	// First, what should we do when packets are not accepted.
 	var ipfwFilterDenyAction ipfw.Action

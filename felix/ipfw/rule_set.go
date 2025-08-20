@@ -260,6 +260,25 @@ func NewRuleSet(
 	}
 	ruleset.restoreInputBuffer.NumLinesWritten = ruleset.countNumLinesExecuted
 
+	ruleset.chainNameToChain["INPUT"] = &Chain{
+		Name: "INPUT",
+		Rules: []Rule{
+			{Number: 10},
+		},
+	}
+	ruleset.chainNameToChain["OUTPUT"] = &Chain{
+		Name: "OUTPUT",
+		Rules: []Rule{
+			{Number: 30},
+		},
+	}
+	ruleset.chainNameToChain["FORWARD"] = &Chain{
+		Name: "FORWARD",
+		Rules: []Rule{
+			{Number: 50},
+		},
+	}
+
 	if options.OnStillAlive != nil {
 		ruleset.onStillAlive = options.OnStillAlive
 	} else {

@@ -48,7 +48,6 @@ import (
 	libapiv3 "github.com/projectcalico/calico/libcalico-go/lib/apis/v3"
 	"github.com/projectcalico/calico/libcalico-go/lib/backend"
 	bapi "github.com/projectcalico/calico/libcalico-go/lib/backend/api"
-	"github.com/projectcalico/calico/libcalico-go/lib/backend/k8s"
 	"github.com/projectcalico/calico/libcalico-go/lib/backend/model"
 	"github.com/projectcalico/calico/libcalico-go/lib/backend/syncersv1/dedupebuffer"
 	"github.com/projectcalico/calico/libcalico-go/lib/backend/syncersv1/felixsyncer"
@@ -63,7 +62,6 @@ import (
 	"github.com/projectcalico/calico/libcalico-go/lib/metricsserver"
 	"github.com/projectcalico/calico/libcalico-go/lib/options"
 	"github.com/projectcalico/calico/libcalico-go/lib/set"
-	"github.com/projectcalico/calico/libcalico-go/lib/winutils"
 	"github.com/projectcalico/calico/pod2daemon/binder"
 	"github.com/projectcalico/calico/typha/pkg/discovery"
 	"github.com/projectcalico/calico/typha/pkg/syncclient"
@@ -90,37 +88,14 @@ const (
 	gracefulShutdownTimeout = 30 * time.Second
 )
 
-// Run is the entry point to run a Felix instance.
-//
-// Its main role is to sequence Felix's startup by:
-//
-// Initialising early logging config (log format and early debug settings).
-//
-// Parsing command line parameters.
-//
-// Loading datastore configuration from the environment or config file.
-//
-// Loading more configuration from the datastore (this is retried until success).
-//
-// Starting the configured internal (golang) or external dataplane driver.
-//
-// Starting the background processing goroutines, which load and keep in sync with the
-// state from the datastore, the "calculation graph".
-//
-// Starting the usage reporting and prometheus metrics endpoint threads (if configured).
-//
-// Then, it defers to monitorAndManageShutdown(), which blocks until one of the components
-// fails, then attempts a graceful shutdown.  At that point, all the processing is in
-// background goroutines.
-//
-// To avoid having to maintain rarely-used code paths, Felix handles updates to its
-// main config parameters by exiting and allowing itself to be restarted by the init
-// daemon.
+// Felixのdaemon
+// 最初に呼ばれる
 func Run(configFile string, gitVersion string, buildDate string, gitRevision string) {
-	// Special-case handling for environment variable-configured logging:
-	// Initialise early so we can trace out config parsing.
+	// ログレベルのセット
+	// フォーマットセットとか
 	logutils.ConfigureEarlyLogging()
 
+	// contextオブジェクト生成
 	ctx := context.Background()
 
 	if os.Getenv("GOGC") == "" {
@@ -145,17 +120,12 @@ func Run(configFile string, gitVersion string, buildDate string, gitRevision str
 	})
 	buildInfoLogCxt.Info("Felix starting up")
 
-	// Health monitoring, for liveness and readiness endpoints.  The following loop can take a
-	// while before the datastore reports itself as ready - for example when there is data that
-	// needs to be migrated from a previous version - and we still want to Felix to report
-	// itself as live (but not ready) while we are waiting for that.  So we create the
-	// aggregator upfront and will start serving health status over HTTP as soon as we see _any_
-	// config that indicates that.
+	// Felix状態管理用のアグリゲータ生成
 	healthAggregator := health.NewHealthAggregator()
 
 	const healthName = "FelixStartup"
 
-	// Register this function as a reporter of liveness and readiness, with no timeout.
+	// FelixSartupの登録？
 	healthAggregator.RegisterReporter(healthName, &health.HealthReport{Live: true, Ready: true}, 0)
 
 	// Log out the kubernetes server details that we use in BPF mode.
@@ -164,18 +134,15 @@ func Run(configFile string, gitVersion string, buildDate string, gitRevision str
 		"KUBERNETES_SERVICE_PORT": os.Getenv("KUBERNETES_SERVICE_PORT"),
 	}).Info("Kubernetes server override env vars.")
 
-	// Load the configuration from all the different sources including the
-	// datastore and merge. Keep retrying on failure.  We'll sit in this
-	// loop until the datastore is ready.
+	// コンフィグのロード
 	log.Info("Loading configuration...")
 	var backendClient bapi.Client
 	var v3Client client.Interface
 	var datastoreConfig apiconfig.CalicoAPIConfig
 	var configParams *config.Config
-	var typhaDiscoverer *discovery.Discoverer
 	var numClientsCreated int
-	var k8sClientSet *kubernetes.Clientset
 	var kubernetesVersion string
+// 設定用ループ
 configRetry:
 	for {
 		if numClientsCreated > 60 {
@@ -185,14 +152,13 @@ configRetry:
 			exitWithCustomRC(configChangedRC, "Restarting to avoid leaking datastore connections")
 		}
 
-		// Make an initial report that says we're live but not yet ready.
+		// レポート/まだnot ready状態
 		healthAggregator.Report(healthName, &health.HealthReport{Live: true, Ready: false})
 
-		// Load locally-defined config, including the datastore connection
-		// parameters. First the environment variables.
+		// configの読み込み（環境変数） 
 		configParams = config.New()
 		envConfig := config.LoadConfigFromEnvironment(os.Environ())
-		// Then, the config file.
+		// configの読み込み（ファイル）
 		log.Infof("Loading config file: %v", configFile)
 		fileConfig, err := config.LoadConfigFile(configFile)
 		if err != nil {
@@ -201,7 +167,7 @@ configRetry:
 			time.Sleep(1 * time.Second)
 			continue configRetry
 		}
-		// Parse and merge the local config.
+		// configマージ
 		_, err = configParams.UpdateFrom(envConfig, config.EnvironmentVariable)
 		if err != nil {
 			log.WithError(err).WithField("configFile", configFile).Error(
@@ -217,15 +183,14 @@ configRetry:
 			continue configRetry
 		}
 
-		// Each time round this loop, check that we're serving health reports if we should
-		// be, or cancel any existing server if we should not be serving anymore.
+		// httpサーバーを立ち上げてヘルスチェック
 		healthAggregator.ServeHTTP(configParams.HealthEnabled, configParams.HealthHost, configParams.HealthPort)
 
-		// We should now have enough config to connect to the datastore
-		// so we can load the remainder of the config.
+		// configParamsからdatastore用のconfigを作成
 		datastoreConfig = configParams.DatastoreConfig()
 		// Can't dump the whole config because it may have sensitive information...
 		log.WithField("datastore", datastoreConfig.Spec.DatastoreType).Info("Connecting to datastore")
+		// etcdにアクセスするためのクライアントを作成
 		v3Client, err = client.New(datastoreConfig)
 		if err != nil {
 			log.WithError(err).Error("Failed to create datastore client")
@@ -234,8 +199,10 @@ configRetry:
 		}
 		log.Info("Created datastore client")
 		numClientsCreated++
+		// etcdと直接通信のためのクライアント
 		backendClient = v3Client.(interface{ Backend() bapi.Client }).Backend()
 		for {
+			// configの読み込み（etcd）
 			globalConfig, hostConfig, err := loadConfigFromDatastore(
 				ctx, backendClient, datastoreConfig, configParams.FelixHostname)
 			if err == ErrNotReady {
@@ -248,6 +215,7 @@ configRetry:
 				time.Sleep(1 * time.Second)
 				continue configRetry
 			}
+			// configマージ
 			_, err = configParams.UpdateFrom(globalConfig, config.DatastoreGlobal)
 			if err != nil {
 				log.WithError(err).Error("Failed update global config from datastore")
@@ -262,6 +230,7 @@ configRetry:
 			}
 			break
 		}
+		// configの検証
 		err = configParams.Validate()
 		if err != nil {
 			log.WithError(err).Error("Failed to parse/validate configuration from datastore.")
@@ -269,24 +238,22 @@ configRetry:
 			continue configRetry
 		}
 
-		// List all IP pools and feed them into an EncapsulationCalculator to determine if
-		// IPIP and/or VXLAN encapsulations should be enabled
+		// IPPoolの取得
 		ippoolKVPList, err := backendClient.List(ctx, model.ResourceListOptions{Kind: apiv3.KindIPPool}, "")
 		if err != nil {
 			log.WithError(err).Error("Failed to list IP Pools")
 			time.Sleep(1 * time.Second)
 			continue configRetry
 		}
+		// IPIPやVXLANの利用を計算
 		encapCalculator := calc.NewEncapsulationCalculator(configParams, ippoolKVPList)
 		configParams.Encapsulation.IPIPEnabled = encapCalculator.IPIPEnabled()
 		configParams.Encapsulation.VXLANEnabled = encapCalculator.VXLANEnabled()
 		configParams.Encapsulation.VXLANEnabledV6 = encapCalculator.VXLANEnabledV6()
 
-		// We now have some config flags that affect how we configure the syncer.
-		// After loading the config from the datastore, reconnect, possibly with new
-		// config.  We don't need to re-load the configuration _again_ because the
-		// calculation graph will spot if the config has changed since we were initialised.
+		// etcdからのconfigを含めてdatastore用のconfigを作成
 		datastoreConfig = configParams.DatastoreConfig()
+		// backendClient更新
 		backendClient, err = backend.NewClient(datastoreConfig)
 		if err != nil {
 			log.WithError(err).Error("Failed to (re)connect to datastore")
@@ -295,121 +262,47 @@ configRetry:
 		}
 		numClientsCreated++
 
-		// Try to get a Kubernetes client.  This is needed for discovering Typha and for the BPF mode of the dataplane.
-		k8sClientSet = nil
-		if kc, ok := backendClient.(*k8s.KubeClient); ok {
-			// Opportunistically share the k8s client with the datastore driver.  This is the best option since
-			// it reduces the number of connections and it lets us piggy-back on the datastore driver's config.
-			log.Info("Using Kubernetes datastore driver, sharing Kubernetes client with datastore driver.")
-			k8sClientSet = kc.ClientSet
-		} else {
-			// Not using KDD, fall back on trying to get a Kubernetes client from the environment.
-			log.Info("Not using Kubernetes datastore driver, trying to get a Kubernetes client...")
-			k8sconf, err := winutils.BuildConfigFromFlags("", os.Getenv("KUBECONFIG"))
-			if err != nil {
-				log.WithError(err).Info("Kubernetes in-cluster config not available. " +
-					"Assuming we're not in a Kubernetes deployment.")
-			} else {
-				k8sClientSet, err = kubernetes.NewForConfig(k8sconf)
-				if err != nil {
-					log.WithError(err).Error("Got in-cluster config but failed to create Kubernetes client.")
-					time.Sleep(1 * time.Second)
-					continue configRetry
-				}
-			}
-		}
-
-		if k8sClientSet != nil {
-			serverVersion, err := k8sClientSet.Discovery().ServerVersion()
-			if err != nil {
-				log.WithError(err).Error("Couldn't read server version from server")
-			}
-
-			log.Infof("Server Version: %#v\n", *serverVersion)
-			kubernetesVersion = serverVersion.GitVersion
-		} else {
-			log.Info("no Kubernetes client available")
-		}
-
-		// If we're configured to discover Typha, do a one-shot discovery now to make sure that our config is
-		// sound before we exit the loop.
-		typhaDiscoverer = createTyphaDiscoverer(configParams, k8sClientSet)
-		// Wireguard can block connection to Typha, add a post-discovery hook to detect and resolve any
-		// interactions.  (This will be a no-op if wireguard has never been turned on.)
-		typhaDiscoverer.AddPostDiscoveryFilter(func(typhaAddresses []discovery.Typha) ([]discovery.Typha, error) {
-			// Perform wireguard bootstrap processing. This may remove wireguard configuration if wireguard
-			// is disabled or if the configuration is obviously broken. This also filters the typha addresses
-			// based on whether routing is obviously broken to the typha node (due to wireguard routing
-			// asymmetry). If all typha instances would be filtered out then we temporarily disable wireguard
-			// on this node to allow bootstrap to proceed.
-			log.Info("Got post-discovery callback from Typha discoverer; checking if we need to " +
-				"filter out any Typha addresses due to Wireguard bootstrap.")
-			return bootstrapWireguardAndFilterTyphaAddresses(configParams, v3Client, typhaAddresses)
-		})
-		typhaAddresses, err := typhaDiscoverer.LoadTyphaAddrs()
-		if err != nil {
-			log.WithError(err).Error("Typha discovery enabled but discovery failed.")
-			time.Sleep(1 * time.Second)
-			continue configRetry
-		} else if len(typhaAddresses) > 0 {
-			log.WithField("typhaAddrs", typhaAddresses).Info("Discovered initial set of Typha instances.")
-		} else {
-			log.Info("Typha not enabled.")
-		}
+		// Kubernetes関係を削除した
+		log.Info("no Kubernetes client available")
+		log.Info("Typha not enabled.")
 
 		break configRetry
 	}
 
+	// 不整合チェック？
 	if numClientsCreated > 2 {
 		// We don't have a way to close datastore connection so, if we reconnected after
 		// a failure to load config, restart felix to avoid leaking connections.
 		exitWithCustomRC(configChangedRC, "Restarting to avoid leaking datastore connections")
 	}
 
-	if configParams.BPFEnabled {
-		// Check for BPF dataplane support before we do anything that relies on the flag being set one way or another.
-		if err := dp.SupportsBPF(); err != nil {
-			log.WithError(err).Error("BPF dataplane mode enabled but not supported by the kernel.  Disabling BPF mode.")
-			_, err := configParams.OverrideParam("BPFEnabled", "false")
-			if err != nil {
-				log.WithError(err).Panic("Bug: failed to override config parameter")
-			}
-		}
-	}
-
-	// Set any watchdog timeout overrides before we initialise components.
+	// ヘルス関連
 	health.SetGlobalTimeoutOverrides(configParams.HealthTimeoutOverrides)
-
-	// Enable or disable the health HTTP server according to coalesced config.
 	healthAggregator.ServeHTTP(configParams.HealthEnabled, configParams.HealthHost, configParams.HealthPort)
 
-	// If we get here, we've loaded the configuration successfully.
-	// Update log levels before we do anything else.
+	// ログ関連
 	logutils.ConfigureLogging(configParams)
-	// Since we may have enabled more logging, log with the build context
-	// again.
 	buildInfoLogCxt.WithField("config", configParams).Info(
 		"Successfully loaded configuration.")
 
-	// Configure Windows firewall rules if appropriate
-	winutils.MaybeConfigureWindowsFirewallRules(configParams.WindowsManageFirewallRules, configParams.PrometheusMetricsEnabled, configParams.PrometheusMetricsPort)
-
+	// デバック用: パニックを指定時間で呼び出すやつ
 	if configParams.DebugPanicAfter > 0 {
 		log.WithField("delay", configParams.DebugPanicAfter).Warn("DebugPanicAfter is set, will panic after delay!")
 		go panicAfter(configParams.DebugPanicAfter)
 	}
 
+	// デバック用:
 	if configParams.DebugSimulateDataRace {
 		log.Warn("DebugSimulateDataRace is set, will start some racing goroutines!")
 		simulateDataRace()
 	}
 
+	// デバック用:
 	if configParams.DebugPort != 0 {
 		debugserver.StartDebugPprofServer(configParams.DebugHost, configParams.DebugPort)
 	}
 
-	// Start up the dataplane driver.  This may be the internal go-based driver or an external
-	// one.
+	// dataplane driverのセットアップ
 	var dpDriver dp.DataplaneDriver
 	var dpDriverCmd *exec.Cmd
 
@@ -426,20 +319,20 @@ configRetry:
 		log.Panic("Graceful shutdown took too long")
 	}
 
+	// dataplane driverのスタート
+	// dataplane/dataplane_freebsd.go
 	dpDriver, dpDriverCmd = dp.StartDataplaneDriver(
 		configParams.Copy(), // Copy to avoid concurrent access.
 		healthAggregator,
 		configChangedRestartCallback,
 		fatalErrorCallback)
 
-	// Defer reporting ready until we've started the dataplane driver.  This
-	// ensures that our overall readiness waits for the dataplane driver to
-	// report ready on its health report.
+	// ヘルスをreadyにする
 	healthAggregator.Report(healthName, &health.HealthReport{Live: true, Ready: true})
 
-	// Initialise the glue logic that connects the calculation graph to/from the dataplane driver.
 	log.Info("Connect to the dataplane driver.")
 
+	// dataplaneとの接続を初期化: 使用状況や統計情報を送る
 	var connToUsageRepUpdChan chan map[string]string
 	if configParams.UsageReportingEnabled {
 		// Make a channel for the connector to use to send updates to the usage reporter.
@@ -489,37 +382,17 @@ configRetry:
 
 	// Get a Syncer from the datastore, or a connection to our remote sync daemon, Typha,
 	// which will feed the calculation graph with updates, bringing Felix into sync.
+
+	// syncerのセットアップ
 	var syncer Startable
 	var typhaConnection *syncclient.SyncerClient
 	syncerToValidator := dedupebuffer.New()
 
-	if typhaDiscoverer.TyphaEnabled() {
-		// Use a remote Syncer, via the Typha server.
-		log.Info("Connecting to Typha.")
-		typhaConnection = syncclient.New(
-			typhaDiscoverer,
-			buildinfo.GitVersion,
-			configParams.FelixHostname,
-			fmt.Sprintf("Revision: %s; Build date: %s",
-				buildinfo.GitRevision, buildinfo.BuildDate),
-			syncerToValidator,
-			&syncclient.Options{
-				ReadTimeout:  configParams.TyphaReadTimeout,
-				WriteTimeout: configParams.TyphaWriteTimeout,
-				KeyFile:      configParams.TyphaKeyFile,
-				CertFile:     configParams.TyphaCertFile,
-				CAFile:       configParams.TyphaCAFile,
-				ServerCN:     configParams.TyphaCN,
-				ServerURISAN: configParams.TyphaURISAN,
-			},
-		)
-	} else {
-		// Use the syncer locally.
-		syncer = felixsyncer.New(backendClient, datastoreConfig.Spec, syncerToValidator, configParams.IsLeader())
-
-		log.Info("using resource updates where applicable")
-		configParams.SetUseNodeResourceUpdates(true)
-	}
+	// Use the syncer locally.
+	syncer = felixsyncer.New(backendClient, datastoreConfig.Spec, syncerToValidator, configParams.IsLeader())
+	log.Info("using resource updates where applicable")
+	configParams.SetUseNodeResourceUpdates(true)
+	
 	log.WithField("syncer", syncer).Info("Created Syncer")
 
 	// Start the background processing threads.

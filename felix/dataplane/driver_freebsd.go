@@ -40,40 +40,32 @@ import (
 	"github.com/projectcalico/calico/libcalico-go/lib/health"
 )
 
+// datapleneのスタート関数
 func StartDataplaneDriver(configParams *config.Config,
 	healthAggregator *health.HealthAggregator,
 	configChangedRestartCallback func(),
 	fatalErrorCallback func(error)) (DataplaneDriver, *exec.Cmd) {
 
-	fmt.Printf("souma-log: StartDataplaneDriver")
-
+	// リーダーかを判別
 	if !configParams.IsLeader() {
 		// Return an inactive dataplane, since we're not the leader.
 		log.Info("Not the leader, using an inactive dataplane")
 		return &inactive.InactiveDataplane{}, nil
 	}
 
+	// FreeBSD Dataplane Driver
 	if configParams.UseInternalDataplaneDriver {
 		log.Info("Using internal FreeBSD dataplane driver.")
-		// If kube ipvs interface is present, enable ipvs support.  In BPF mode, we bypass kube-proxy so IPVS
-		// is irrelevant.
 		if configChangedRestartCallback == nil || fatalErrorCallback == nil {
 			log.Panic("Starting dataplane with nil callback func.")
 		}
 
 		tagNumManager := tagnum.NewTagNumManager("felix-ipfw")
 
-		// Allocate mark bits; only the accept, scratch-0 and Wireguard bits are used in BPF mode so we
-		// avoid allocating the others to minimize the number of bits in use.
-
-		// The accept bit is a long-lived bit used to communicate between chains.
+		// Tag用のNumberを取得
 		var tagAccept, tagPass, tagScratch0, tagScratch1, tagEndpointNonCaliEndpoint uint16
 		tagAccept, _ = tagNumManager.NextTagNum()
-
-		// The pass bit is used to communicate from a policy chain up to the endpoint chain.
 		tagPass, _ = tagNumManager.NextTagNum()
-
-		// Scratch bits are short-lived bits used for calculating multi-rule results.
 		tagScratch0, _ = tagNumManager.NextTagNum()
 		tagScratch1, _ = tagNumManager.NextTagNum()
 
@@ -83,7 +75,6 @@ func StartDataplaneDriver(configParams *config.Config,
 			}).Panic("Not enough mark bits available.")
 		}
 
-		// Mark bits for endpoint mark. Currently Felix takes the rest bits from mask available for use.
 		tagEndpointMark, _ := tagNumManager.NextTagNum()
 		log.WithFields(log.Fields{
 			"acceptTag":          tagAccept,
@@ -97,12 +88,13 @@ func StartDataplaneDriver(configParams *config.Config,
 		reservedTables := []idalloc.IndexRange{{Min: 253, Max: 255}}
 		routeTableIndexAllocator := idalloc.NewIndexAllocator(configParams.RouteTableIndices(), reservedTables)
 
-		// Extract node labels from the hosts such they could be referenced later
-		// e.g. Topology Aware Hints.
+		// hostname取得
 		felixHostname := configParams.FelixHostname
 
 		var felixNodeZone string
 
+		// 引数configParamsからconfigを定義
+		// 足りないものあるかもしれない
 		dpConfig := intdataplane.Config{
 			Hostname:           felixHostname,
 			NodeZone:           felixNodeZone,
@@ -220,8 +212,10 @@ func StartDataplaneDriver(configParams *config.Config,
 			RouteSource: configParams.RouteSource,
 		}
 
+		// DataplaneDriverをdpConfigから生成
+		// dataplane/freebsd/int_dataplane.go
 		intDP := intdataplane.NewIntDataplaneDriver(dpConfig)
-		log.Debug("souma-log: int.DP.Start()")
+		// Driverをスタート
 		intDP.Start()
 
 		return intDP, nil

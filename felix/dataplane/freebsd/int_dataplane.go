@@ -292,8 +292,11 @@ const (
 	aksMTUOverhead         = 100
 )
 
+// configからDataplane Driverを生成
 func NewIntDataplaneDriver(config Config) *InternalDataplane {
 	log.WithField("config", config).Info("Creating internal FreeBSD dataplane driver.")
+	// ruleRendererを生成
+	// rules/rule_def.go
 	ruleRenderer := rules.NewRenderer(config.RulesConfig)
 
 	epTagMapper := rules.NewEndpointTagMapper(config.RulesConfig.IpfwTagNonCaliEndpoint)
@@ -841,7 +844,6 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 	}
 }
 
-
 const (
 	IN_ENTRY = 1
 	OUT_ENTRY = 2
@@ -860,52 +862,52 @@ const (
 
 func setUpIptablesCompatible() error {
 	firstRule := []ipfw.Rule {
-		ipfw.Rule{
+		{
 			Number: IN_ENTRY,
 			Action: ipfw.CallAction{RuleNumber: IN_RULE},
 			Match: ipfw.Match().NotSourceNet("me").DestNet("me").PacketDirection("in"),
 		},
-		ipfw.Rule{
+		{
 			Number: OUT_ENTRY,
 			Action: ipfw.CallAction{RuleNumber: OUT_RULE},
 			Match: ipfw.Match().SourceNet("me").NotDestNet("me").PacketDirection("out"),
 		},
-		ipfw.Rule{
+		{
 			Number: FOR_ENTRY,
 			Action: ipfw.CallAction{RuleNumber: FOR_RULE},
 			Match: ipfw.Match().NotSourceNet("me").NotDestNet("me"),
 		},
-		ipfw.Rule{
+		{
 			Number: END_ENTRY,
 			Action: ipfw.SkiptoAction{RuleNumber: END_RULE},
 			Match: ipfw.Match().SourceNet("any").DestNet("any"),
 		},
-		ipfw.Rule{
+		{
 			Number: IN_RULE,
 			Action: ipfw.CountAction{},
 			Comment: []string{"in packet"},
 		},
-		ipfw.Rule{
+		{
 			Number: IN_END,
 			Action: ipfw.SkiptoAction{RuleNumber: END_RULE},
 			Match: ipfw.Match().SourceNet("any").DestNet("any"),
 		},
-		ipfw.Rule{
+		{
 			Number: OUT_RULE,
 			Action: ipfw.CountAction{},
 			Comment: []string{"out packet"},
 		},
-		ipfw.Rule{
+		{
 			Number: OUT_END,
 			Action: ipfw.SkiptoAction{RuleNumber: END_RULE},
 			Match: ipfw.Match().SourceNet("any").DestNet("any"),
 		},
-		ipfw.Rule{
+		{
 			Number: FOR_RULE,
 			Action: ipfw.CountAction{},
 			Comment: []string{"forward packet"},
 		},
-		ipfw.Rule{
+		{
 			Number: FOR_END,
 			Action: ipfw.SkiptoAction{RuleNumber: END_RULE},
 			Match: ipfw.Match().SourceNet("any").DestNet("any"),
