@@ -183,6 +183,7 @@ func NewRuleSet(
 	oldInsertRegexp := regexp.MustCompile(oldInsertPattern)
 
 	appends := map[string][]Rule{}
+	inserts := map[string][]Rule{}
 	dirtyAppend := set.New[string]()
 	refcounts := map[string]int{}
 	appends["all"] = []Rule{}
@@ -225,6 +226,7 @@ func NewRuleSet(
 		IPVersion:              ipVersion,
 		featureDetector:        featureDetector,
 		chainToAppendedRules:   appends,
+		chainToInsertedRules:   inserts,
 		dirtyAppend:      dirtyAppend,
 		chainNameToChain:       map[string]*Chain{},
 		chainRefCounts:         refcounts,
