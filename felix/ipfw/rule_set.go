@@ -857,20 +857,30 @@ func (r *RuleSet) execIpfwRestore(buf *RestoreInputBuilder) error {
 	return nil
 }
 
+// Chainへのルール追加
+// ・chainToAppendedRulesの更新
 func (t *RuleSet) InsertOrAppendRules(chainName string, rules []Rule) {
 	t.logCxt.WithField("chainName", chainName).Debug("Updating rule insertions")
+	// 古いルールの取得
 	oldRules := t.chainToInsertedRules[chainName]
-	t.chainToAppendedRules[chainName] = rules
+	// 新しいルールを保存
+	t.chainToInsertedRules[chainName] = rules
+	// ルール数の更新
 	numRulesDelta := len(rules) - len(oldRules)
 	t.gaugeNumRules.Add(float64(numRulesDelta))
+	// 次回Apply時に反映するためのマーキング
 	t.dirtyAppend.Add(chainName)
 
+	// 参照数などの管理
 	t.maybeIncrefReferredChains(chainName, rules)
 	t.maybeDecrefReferredChains(chainName, oldRules)
 
+	// 再チェックと更新を促すためのキャシュ無効化
 	t.InvalidateDataplaneCache("insertion")
 }
 
+// Chainへのルール追加（Append版）
+// 使うmapが違う
 func (t *RuleSet) AppendRules(chainName string, rules []Rule) {
 	t.logCxt.WithField("chainName", chainName).Debug("Updating rule appends")
 	oldRules := t.chainToAppendedRules[chainName]
@@ -891,27 +901,26 @@ func (t *RuleSet) UpdateChains(chains []*Chain) {
 	}
 }
 
+// Chainの登録
+// ・chainNameToChainの登録
+// ・dirtyChainsへの登録
 func (t *RuleSet) UpdateChain(chain *Chain) {
 	t.logCxt.WithField("chainName", chain.Name).Debug("Adding chain to available set.")
 	oldNumRules := 0
 
-	// Incref any newly-referenced chains, then decref the old ones.  By incrementing first we
-	// avoid marking a still-referenced chain as dirty.
 	t.maybeIncrefReferredChains(chain.Name, chain.Rules)
 	if oldChain := t.chainNameToChain[chain.Name]; oldChain != nil {
 		oldNumRules = len(oldChain.Rules)
 		t.maybeDecrefReferredChains(chain.Name, oldChain.Rules)
 	}
+	// chainNameToChainの登録
 	t.chainNameToChain[chain.Name] = chain
 	numRulesDelta := len(chain.Rules) - oldNumRules
 	t.gaugeNumRules.Add(float64(numRulesDelta))
 	if t.chainIsReferenced(chain.Name) {
+		// dirtyCainsへの登録
 		t.dirtyChains.Add(chain.Name)
 
-		// Defensive: make sure we re-read the dataplane state before we make updates.  While the
-		// code was originally designed not to need this, we found that other users of
-		// ipfw-restore can still clobber our updates so it's safest to re-read the state before
-		// each write.
 		t.InvalidateDataplaneCache("chain update")
 	}
 }
