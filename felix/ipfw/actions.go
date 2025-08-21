@@ -45,7 +45,13 @@ type CallAction struct {
 }
 
 func (a CallAction) String() string {
-	return fmt.Sprintf("call %d", a.RuleNumber)
+	if a.RuleNumber != 0 {
+		return fmt.Sprintf("call %d", a.RuleNumber)
+	}
+	if a.Target != "" {
+		return fmt.Sprintf("call %d", ChainNameToChainNum[a.Target])
+	}
+	return "// failed callAction: no filed RuleNumber or Target"
 }
 
 type ReturnAction struct {

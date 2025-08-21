@@ -62,7 +62,11 @@ var (
 	}, []string{"ip_version", "ruleset"})
 )
 
+var ChainNameToChainNum map[string]uint16
+
 func init() {
+	ChainNameToChainNum = make(map[string]uint16)
+
 	prometheus.MustRegister(countNumRestoreCalls)
 	prometheus.MustRegister(countNumRestoreErrors)
 	prometheus.MustRegister(countNumSaveCalls)
@@ -915,6 +919,8 @@ func (t *RuleSet) UpdateChain(chain *Chain) {
 	}
 	// chainNameToChainの登録
 	t.chainNameToChain[chain.Name] = chain
+	// ChainNameToChainNumの登録
+	ChainNameToChainNum[chain.Name] = chain.GetStartRuleNum()
 	numRulesDelta := len(chain.Rules) - oldNumRules
 	t.gaugeNumRules.Add(float64(numRulesDelta))
 	if t.chainIsReferenced(chain.Name) {

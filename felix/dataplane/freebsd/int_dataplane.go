@@ -914,6 +914,10 @@ func setUpIptablesCompatible() error {
 		},
 	}
 
+	ipfw.ChainNameToChainNum["INPUT"] = IN_RULE
+	ipfw.ChainNameToChainNum["OUTPUT"] = OUT_RULE
+	ipfw.ChainNameToChainNum["FORWARD"] = FOR_RULE
+
 	if err := ipfw.RulesToRestoreFile(firstRule, RESTORE_FILE); err != nil {
 		return fmt.Errorf("RulesToRestoreFile failed: %v", err)
 	}
