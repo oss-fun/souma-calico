@@ -183,10 +183,14 @@ func (r *DefaultRuleRenderer) StaticFilterOutputForwardEndpointMarkChain() *Chai
 		},
 	)
 
-	return &Chain{
+	result := &Chain{
 		Name:  ChainForwardEndpointTag,
 		Rules: fwRules,
 	}
+	if err := result.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed StaticFilterOutputForwardEndpointMarkChain result Organize")
+	}
+	return result
 }
 
 func FilterInputChainAllowWG(ipVersion uint8, r Config, allowAction ipfw.Action) []Rule {
@@ -230,10 +234,14 @@ func (r *DefaultRuleRenderer) filterInputChain(ipVersion uint8) *Chain {
 		},
 	)
 
-	return &Chain{
+	result := &Chain{
 		Name:  ChainFilterInput,
 		Rules: inputRules,
 	}
+	if err := result.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed filterInputChain result Organize")
+	}
+	return result
 }
 
 func ICMPv6Filter(action ipfw.Action) []Rule {
@@ -399,10 +407,14 @@ func (r *DefaultRuleRenderer) failsafeInChain(table string, ipVersion uint8) *Ch
 		}
 	}
 
-	return &Chain{
+	result := &Chain{
 		Name:  ChainFailsafeIn,
 		Rules: rules,
 	}
+	if err := result.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed failsafeInChain result Organize")
+	}
+	return result
 }
 
 func (r *DefaultRuleRenderer) failsafeOutChain(table string, ipVersion uint8) *Chain {
@@ -466,10 +478,14 @@ func (r *DefaultRuleRenderer) failsafeOutChain(table string, ipVersion uint8) *C
 		}
 	}
 
-	return &Chain{
+	result := &Chain{
 		Name:  ChainFailsafeOut,
 		Rules: rules,
 	}
+	if err := result.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed failsafeOutChain result Organize")
+	}
+	return result
 }
 
 func (r *DefaultRuleRenderer) StaticFilterForwardChains() []*Chain {
@@ -610,10 +626,14 @@ func (r *DefaultRuleRenderer) filterOutputChain(ipVersion uint8) *Chain {
 		},
 	)
 
-	return &Chain{
+	result := &Chain{
 		Name:  ChainFilterOutput,
 		Rules: rules,
 	}
+	if err := result.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed filterOutputChain result Organize")
+	}
+	return result
 }
 
 func (r *DefaultRuleRenderer) StaticNATTableChains(ipVersion uint8) (chains []*Chain) {
@@ -760,10 +780,14 @@ func (r *DefaultRuleRenderer) StaticManglePreroutingChain(ipVersion uint8) *Chai
 		},
 	)
 
-	return &Chain{
+	result := &Chain{
 		Name:  ChainManglePrerouting,
 		Rules: rules,
 	}
+	if err := result.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed StaticManglePreroutingChain result Organize")
+	}
+	return result
 }
 
 func (r *DefaultRuleRenderer) StaticManglePostroutingChain(ipVersion uint8) *Chain {
@@ -815,10 +839,14 @@ func (r *DefaultRuleRenderer) StaticManglePostroutingChain(ipVersion uint8) *Cha
 		},
 	)
 
-	return &Chain{
+	result := &Chain{
 		Name:  ChainManglePostrouting,
 		Rules: rules,
 	}
+	if err := result.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed StaticManglePostroutingChain result Organize")
+	}
+	return result
 }
 
 func (r *DefaultRuleRenderer) StaticRawTableChains(ipVersion uint8) []*Chain {
@@ -866,10 +894,14 @@ func (r *DefaultRuleRenderer) StaticRawPreroutingChain(ipVersion uint8) *Chain {
 			Action: AllowAction{}},
 	)
 
-	return &Chain{
+	result := &Chain{
 		Name:  ChainRawPrerouting,
 		Rules: rules,
 	}
+	if err := result.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed StaticRawPreroutingChain result Organize")
+	}
+	return result
 }
 
 func (r *DefaultRuleRenderer) allCalicoTagNum() uint16 {
@@ -902,10 +934,14 @@ func (r *DefaultRuleRenderer) WireguardIncomingTagChain() *Chain {
 		})
 	}
 
-	return &Chain{
+	result := &Chain{
 		Name:  ChainSetWireguardIncomingMark,
 		Rules: rules,
 	}
+	if err := result.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed WireguardIncomingTagChain result Organize")
+	}
+	return result
 }
 
 func (r *DefaultRuleRenderer) StaticRawOutputChain(tcBypassTag uint16) *Chain {
@@ -932,8 +968,12 @@ func (r *DefaultRuleRenderer) StaticRawOutputChain(tcBypassTag uint16) *Chain {
 				Action: AllowAction{}},
 		}...)
 	}
-	return &Chain{
+	result := &Chain{
 		Name:  ChainRawOutput,
 		Rules: rules,
 	}
+	if err := result.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed StaticRawOutputChain result Organize")
+	}
+	return result
 }

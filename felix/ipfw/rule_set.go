@@ -165,7 +165,7 @@ func NewRuleSet(
 	featureDetector environment.FeatureDetectorIface,
 	options RulesetOptions,
 ) *RuleSet {
-	hashCommentRegexp := regexp.MustCompile(`--comment "?` + hashPrefix + `([a-zA-Z0-9_-]+)"?`)
+	hashCommentRegexp := regexp.MustCompile(`//\s*` + regexp.QuoteMeta(hashPrefix) + `([a-zA-Z0-9_-]+)`)
 	ourChainsPattern := "^(" + strings.Join(options.HistoricChainPrefixes, "|") + ")"
 	ourChainsRegexp := regexp.MustCompile(ourChainsPattern)
 
@@ -852,7 +852,7 @@ func (r *RuleSet) execIpfwRestore(buf *RestoreInputBuilder) error {
 		return fmt.Errorf("MkdirAll failed: %v", err)
 	}
 
-	input := buf.buf.Bytes()
+	input := buf.GetBytesAndReset()
 
 	path := fmt.Sprintf("%s%d.sh",RESTORE_IPFW, countIpfwRestore)
 	if err := BytesToRestoreFile(input, path); err != nil {

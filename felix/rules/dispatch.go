@@ -439,9 +439,15 @@ func (r *DefaultRuleRenderer) endpointTagDispatchChains(
 		Name:  dispatchSetTagEndpointChainName,
 		Rules: rootSetTagRules,
 	}
+	if err := setTagDispatchChain.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed setTagDispatchChain Organize")
+	}
 	fromTagDispatchChain := &Chain{
 		Name:  dispatchFromTagEndpointChainName,
 		Rules: rootFromTagRules,
+	}
+	if err := fromTagDispatchChain.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed fromTagDispatchChain Organize")
 	}
 	chains = append(chains, setTagDispatchChain, fromTagDispatchChain)
 
@@ -516,6 +522,9 @@ func (r *DefaultRuleRenderer) buildSingleDispatchChains(
 				Name:  childChainName,
 				Rules: childEndpointRules,
 			}
+			if err := childEndpointChain.Organize(); err != nil {
+				log.WithField("err", err).Panic("Failed childEndpointChain Organize")
+			}
 
 			childChains = append(childChains, childEndpointChain)
 
@@ -538,6 +547,9 @@ func (r *DefaultRuleRenderer) buildSingleDispatchChains(
 	rootChain := &Chain{
 		Name:  chainName,
 		Rules: rootRules,
+	}
+	if err := rootChain.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed rootChain Organize")
 	}
 
 	return childChains, rootChain, rootRules

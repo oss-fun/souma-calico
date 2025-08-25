@@ -284,10 +284,14 @@ func (r *DefaultRuleRenderer) endpointSetTagChain(
 			},
 		})
 	}
-	return &Chain{
+	result := &Chain{
 		Name:  chainName,
 		Rules: rules,
 	}
+	if err := result.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed endpointSetTagChain result Organize")
+	}
+	return result
 }
 func (r *DefaultRuleRenderer) PolicyGroupToIpfwChains(group *PolicyGroup) []*Chain {
 	rules := make([]Rule, 0, len(group.PolicyNames)*2-1)
@@ -332,10 +336,17 @@ func (r *DefaultRuleRenderer) PolicyGroupToIpfwChains(group *PolicyGroup) []*Cha
 			Action: CallAction{Target: chainToJumpTo},
 		})
 	}
-	return []*Chain{{
+	results := []*Chain{{
 		Name:  group.ChainName(),
 		Rules: rules,
 	}}
+	for _, v := range results {
+		if err := v.Organize(); err != nil {
+			log.WithField("err", err).Panic("Failed PolicyGroupToIpfwChains result Organize")
+		}
+	}
+
+	return results
 }
 
 func (r *DefaultRuleRenderer) endpointIpfwChain(policyGroups []*PolicyGroup, profileIds []string, name string, policyPrefix PolicyChainNamePrefix, profilePrefix ProfileChainNamePrefix, endpointPrefix string, failsafeChain string, chainType endpointChainType, adminUp bool, allowAction Action, allowVXLANEncap bool, allowIPIPEncap bool) *Chain {
@@ -349,10 +360,14 @@ func (r *DefaultRuleRenderer) endpointIpfwChain(policyGroups []*PolicyGroup, pro
 			Action:  r.IpfwFilterDenyAction(),
 			Comment: []string{"Endpoint admin disabled"},
 		})
-		return &Chain{
+		result := &Chain{
 			Name:  chainName,
 			Rules: rules,
 		}
+		if err := result.Organize(); err != nil {
+			log.WithField("err", err).Panic("Failed endpointIpfwChain result Organize")
+		}
+		return result
 	}
 
 	if chainType != chainTypeUntracked {
@@ -474,10 +489,14 @@ func (r *DefaultRuleRenderer) endpointIpfwChain(policyGroups []*PolicyGroup, pro
 		// }
 	}
 
-	return &Chain{
+	result := &Chain{
 		Name:  chainName,
 		Rules: rules,
 	}
+	if err := result.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed endpointSetTagChain result Organize")
+	}
+	return result
 }
 
 func (r *DefaultRuleRenderer) appendConntrackRules(rules []Rule, allowAction Action) []Rule {

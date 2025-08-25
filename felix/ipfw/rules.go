@@ -71,6 +71,7 @@ func (r Rule) renderInner(fragments []string, prefixFragment string) string {
 
 type Chain struct {
 	Name string
+	Number uint16
 	Rules []Rule
 }
 
@@ -116,7 +117,7 @@ func (c *Chain) RuleHashes(features *environment.Features) []string {
 		hash = s.Sum(hash[0:0])
 		// Encode the hash using a compact character set.  We use the URL-safe base64
 		// variant because it uses '-' and '_', which are more shell-friendly.
-		hashes[ii] = base64.RawURLEncoding.EncodeToString(hash)[:HashLength]
+		hashes[ii] = fmt.Sprintf("%s:%s", c.Name, base64.RawURLEncoding.EncodeToString(hash)[:HashLength])
 		if log.GetLevel() >= log.DebugLevel {
 			log.WithFields(log.Fields{
 				"ruleFragment": ruleForHashing,
@@ -131,11 +132,64 @@ func (c *Chain) RuleHashes(features *environment.Features) []string {
 }
 
 func (c *Chain) GetStartRuleNum() uint16 {
-	if len(c.Rules) <= 0 {
+	switch {
+	case c.Number != 0:
+		return c.Number
+	case len(c.Rules) != 0:
+		c.Number = c.Rules[0].Number
+		return c.Number
+	case ChainNameToChainNum[c.Name] != 0:
+		c.Number = ChainNameToChainNum[c.Name]
+		return c.Number
+	default:
+		// log.Panic("GetStartRuleNum failed: no number found for chain ", c.Name)
 		return 0
-	} else {
-		return c.Rules[0].Number
 	}
+}
+
+// chain番号とかルール番号の成形
+func (c *Chain) Organize() error {
+	if c == nil {
+		return fmt.Errorf("Chain is nill")
+	}
+
+	// chain番号の生成
+	start := c.GetStartRuleNum()
+	if start == 0 {
+		n, err := c.SetNewNumber()
+		start = n
+		if err != nil {
+			return fmt.Errorf("SetNewNumber failed: %v", err)
+		}
+	}
+	ChainNameToChainNum[c.Name] = start
+
+	// rule番号の生成
+	for i, r := range c.Rules {
+		r.Number = start + uint16(i)
+	}
+
+	return nil
+}
+
+const (
+	RULE_BUF = 10
+)
+
+// chain番号の生成
+func (c *Chain) SetNewNumber() (uint16, error) {
+	var result uint16
+	for _, n := range ChainNameToChainNum {
+		if result < n {
+			result = n
+		}
+	}
+	result = result + RULE_BUF
+	if result >= 65535 {
+		return 0, fmt.Errorf("No Enough Chain Num")
+	}
+
+	return result, nil
 }
 
 func (c *Chain) GetFinRuleNum() uint16 {
