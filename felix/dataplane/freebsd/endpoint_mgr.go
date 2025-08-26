@@ -861,6 +861,9 @@ func (m *endpointManager) updateRPFSkipChain() {
 		Name:  rules.ChainRpfSkip,
 		Rules: make([]ipfw.Rule, 0),
 	}
+	if err := chain.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed updateRPFSkipChain result Organize")
+	}
 	for interfaceName, addresses := range m.sourceSpoofingConfig {
 		for _, addr := range addresses {
 			chain.Rules = append(chain.Rules, ipfw.Rule{

@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strings"
 
+	log "github.com/sirupsen/logrus"
+
 	"github.com/projectcalico/calico/felix/ipfw"
 )
 
@@ -54,26 +56,42 @@ func (r *DefaultRuleRenderer) NATOutgoingChain(natOutgoingActive bool, ipVersion
 			r.MakeNatOutgoingRule("", defaultSnatRule, ipVersion),
 		}
 	}
-	return &ipfw.Chain{
+	result := &ipfw.Chain{
 		Name:  ChainNATOutgoing,
 		Rules: rules,
 	}
+	if err := result.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed NATOutgoingChain result Organize")
+	}
+	return result
 }
 
 func (r *DefaultRuleRenderer) DNATsToIpfwChains(_ map[string]string) []*ipfw.Chain {
 	rules := []ipfw.Rule{}
-	return []*ipfw.Chain{{
+	results := []*ipfw.Chain{{
 		Name:  ChainFIPDnat,
 		Rules: rules,
 	}}
+	for _, v := range results {
+		if err := v.Organize(); err != nil {
+			log.WithField("err", err).Panic("Failed DNATsToIpfwChains result Organize")
+		}
+	}
+	return results
 }
 
 func (r *DefaultRuleRenderer) SNATsToIpfwChains(_ map[string]string) []*ipfw.Chain {
 	rules := []ipfw.Rule{}
-	return []*ipfw.Chain{{
+	results := []*ipfw.Chain{{
 		Name:  ChainFIPSnat,
 		Rules: rules,
 	}}
+	for _, v := range results {
+		if err := v.Organize(); err != nil {
+			log.WithField("err", err).Panic("Failed DNATsToIpfwChains result Organize")
+		}
+	}
+	return results
 }
 
 func (r *DefaultRuleRenderer) BlockedCIDRsToIpfwChains(cidrs []string, ipVersion uint8) []*ipfw.Chain {
@@ -89,8 +107,14 @@ func (r *DefaultRuleRenderer) BlockedCIDRsToIpfwChains(cidrs []string, ipVersion
 			}
 		}
 	}
-	return []*ipfw.Chain{{
+	results := []*ipfw.Chain{{
 		Name:  ChainCIDRBlock,
 		Rules: rules,
 	}}
+	for _, v := range results {
+		if err := v.Organize(); err != nil {
+			log.WithField("err", err).Panic("Failed DNATsToIpfwChains result Organize")
+		}
+	}
+	return results
 }

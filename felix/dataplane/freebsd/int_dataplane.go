@@ -813,8 +813,6 @@ func (d *InternalDataplane) monitorHostMTU() {
 // once at start of day before starting the main loop.  The actual ipfw programming is deferred
 // to the main loop.
 func (d *InternalDataplane) doStaticDataplaneConfig() {
-	fmt.Printf("souma-log: doStaticDataplaneConfig")
-
 	// Check/configure global kernel parameters.
 	d.configureKernel()
 

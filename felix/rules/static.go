@@ -108,10 +108,14 @@ func (r *DefaultRuleRenderer) StaticFilterInputForwardCheckChain(ipVersion uint8
 		},
 	)
 
-	return &Chain{
+	result := &Chain{
 		Name:  ChainForwardCheck,
 		Rules: fwRules,
 	}
+	if err := result.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed StaticFilterInputForwardCheckChain result Organize")
+	}
+	return result
 }
 
 // With kube-proxy running in ipvs mode, we categorise traffic going through OUTPUT chain into three classes.
@@ -546,10 +550,16 @@ func (r *DefaultRuleRenderer) StaticFilterForwardChains() []*Chain {
 		},
 	)
 
-	return []*Chain{{
+	results := []*Chain{{
 		Name:  ChainFilterForward,
 		Rules: rules,
 	}}
+	for _, v := range results {
+		if err := v.Organize(); err != nil {
+			log.WithField("err", err).Panic("Failed StaticFilterForwardChains result Organize")
+		}
+	}
+	return results
 }
 
 // StaticFilterForwardAppendRules returns rules which should be statically appended to the end of the filter
@@ -665,6 +675,11 @@ func (r *DefaultRuleRenderer) StaticNATPreroutingChains(ipVersion uint8) []*Chai
 		Rules: rules,
 	}}
 
+	for _, v := range chains {
+		if err := v.Organize(); err != nil {
+			log.WithField("err", err).Panic("Failed StaticFilterForwardChains result Organize")
+		}
+	}
 	return chains
 }
 

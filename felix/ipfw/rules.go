@@ -57,14 +57,13 @@ func (r Rule) renderInner(fragments []string, prefixFragment string) string {
 		allPacketMatch := Match().SourceNet("any").DestNet("any").Render()
 		fragments = append(fragments, allPacketMatch)
 	}
-	if prefixFragment != "" {
-		fragments = append(fragments, prefixFragment)
-	}
 	if len(r.Comment) > 0 {
 		for _, c := range r.Comment {
-			fmt.Printf("[Souma-log] Comment: %s\n",c)
 			fragments = append(fragments, fmt.Sprintf("// %s", c))
 		}
+	}
+	if prefixFragment != "" {
+		fragments = append(fragments, prefixFragment)
 	}
 	return strings.Join(fragments, " ")
 }
@@ -143,7 +142,7 @@ func (c *Chain) GetStartRuleNum() uint16 {
 		return c.Number
 	default:
 		// log.Panic("GetStartRuleNum failed: no number found for chain ", c.Name)
-		return 0
+		return 65535
 	}
 }
 
@@ -155,8 +154,8 @@ func (c *Chain) Organize() error {
 
 	// chain番号の生成
 	start := c.GetStartRuleNum()
-	if start == 0 {
-		n, err := c.SetNewNumber()
+	if start == 65535 {
+		n, err := SetNewNumber()
 		start = n
 		if err != nil {
 			return fmt.Errorf("SetNewNumber failed: %v", err)
@@ -177,18 +176,20 @@ const (
 )
 
 // chain番号の生成
-func (c *Chain) SetNewNumber() (uint16, error) {
+func SetNewNumber() (uint16, error) {
 	var result uint16
 	for _, n := range ChainNameToChainNum {
 		if result < n {
 			result = n
 		}
 	}
+	fmt.Printf("[souma-log] SetNewNumber(): %v\n", result)
 	result = result + RULE_BUF
 	if result >= 65535 {
 		return 0, fmt.Errorf("No Enough Chain Num")
 	}
 
+	fmt.Printf("[souma-log] SetNewNumber(): %v\n", result)
 	return result, nil
 }
 

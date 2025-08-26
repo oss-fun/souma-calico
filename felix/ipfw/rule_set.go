@@ -3,6 +3,9 @@
 package ipfw
 
 import (
+	"bufio"
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"sync"
@@ -269,21 +272,18 @@ func NewRuleSet(
 
 	ruleset.chainNameToChain["INPUT"] = &Chain{
 		Name: "INPUT",
-		Rules: []Rule{
-			{Number: 10},
-		},
+		Number: 10,
+		Rules: []Rule{},
 	}
 	ruleset.chainNameToChain["OUTPUT"] = &Chain{
 		Name: "OUTPUT",
-		Rules: []Rule{
-			{Number: 30},
-		},
+		Number: 20,
+		Rules: []Rule{},
 	}
 	ruleset.chainNameToChain["FORWARD"] = &Chain{
 		Name: "FORWARD",
-		Rules: []Rule{
-			{Number: 50},
-		},
+		Number: 30,
+		Rules: []Rule{},
 	}
 
 	if options.OnStillAlive != nil {
@@ -533,8 +533,45 @@ func (t *RuleSet) attemptToGetHashesAndRulesFromDataplane() (hashes map[string][
 func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]string, rules map[string][]string, err error) {
 	hashes = make(map[string][]string)
 	rules = make(map[string][]string)
-	err = nil
-	return
+
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		// ipfw 出力例: "00100 allow ip from any to any // cali:forward:spH8qYYv24LlK31x"
+		if !strings.Contains(line, "// cali:") {
+			continue
+		}
+
+		parts := strings.SplitN(line, "// cali:", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		ruleText := strings.TrimSpace(parts[0])
+		meta := strings.TrimSpace(parts[1])
+
+		// "forward:spH8qYYv24LlK31x" → chainName="forward", ruleID="spH8qYYv24LlK31x"
+		metaParts := strings.SplitN(meta, ":", 2)
+		chainName := "cali-unknown"
+		if len(metaParts) >= 1 {
+			chainName = "cali-" + metaParts[0]
+		}
+
+		// 保存
+		rules[chainName] = append(rules[chainName], ruleText)
+
+		h := sha1.Sum([]byte(ruleText))
+		hashes[chainName] = append(hashes[chainName], hex.EncodeToString(h[:8]))
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	return hashes, rules, nil
 }
 
 func (t *RuleSet) InvalidateDataplaneCache(reason string) {
@@ -782,7 +819,7 @@ func (t *RuleSet) applyUpdates() error {
 	t.dirtyChains.Iter(func(chainName string) error {
 		if _, ok := t.desiredStateOfChain(chainName); !ok {
 			// Chain deletion
-			buf.WriteLine(fmt.Sprintf("--delete-chain %s", chainName))
+			buf.WriteLine(fmt.Sprintf("ipfw delete %d", ChainNameToChainNum[chainName]))
 			newHashes[chainName] = nil
 		}
 		return nil // Delay clearing the set until we've programmed ipfw.
@@ -860,6 +897,10 @@ func (r *RuleSet) execIpfwRestore(buf *RestoreInputBuilder) error {
 	}
 
 	countIpfwRestore++
+
+	if err := exec.Command(path).Run(); err != nil {
+		return fmt.Errorf("exec Restore failed: %v", err)
+	}
 	return nil
 }
 
@@ -923,10 +964,13 @@ func (t *RuleSet) UpdateChain(chain *Chain) {
 	t.chainNameToChain[chain.Name] = chain
 	// ChainNameToChainNumの登録
 	ChainNameToChainNum[chain.Name] = chain.GetStartRuleNum()
+	if chain.GetStartRuleNum() == 65535 {
+		t.logCxt.WithField("chainName", chain.Name).Panic("Failed GetStartRuleNum")
+	}
 	numRulesDelta := len(chain.Rules) - oldNumRules
 	t.gaugeNumRules.Add(float64(numRulesDelta))
 	if t.chainIsReferenced(chain.Name) {
-		// dirtyCainsへの登録
+		// dirtyChainsへの登録
 		t.dirtyChains.Add(chain.Name)
 
 		t.InvalidateDataplaneCache("chain update")

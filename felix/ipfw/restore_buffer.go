@@ -105,7 +105,7 @@ func (b *RestoreInputBuilder) maybeWriteTransactionOpener() {
 // transaction.
 func (b *RestoreInputBuilder) WriteForwardReference(chainName string) {
 	b.maybeWriteTransactionOpener()
-	b.writeFormattedLine(":%s - -", chainName)
+	//b.writeFormattedLine(":%s - -", chainName)
 }
 
 // WriteLine writes a line of iptables instructions to the buffer.  Intended for writing the actual rules.

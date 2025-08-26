@@ -4,6 +4,8 @@ package ipfw
 
 import (
 	"fmt"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type Action interface {
@@ -49,7 +51,17 @@ func (a CallAction) String() string {
 		return fmt.Sprintf("call %d", a.RuleNumber)
 	}
 	if a.Target != "" {
-		return fmt.Sprintf("call %d", ChainNameToChainNum[a.Target])
+		if ChainNameToChainNum[a.Target] != 0 {
+			return fmt.Sprintf("call %d", ChainNameToChainNum[a.Target])
+		} else {
+			n, err := SetNewNumber()
+			if err != nil {
+				log.WithError(err).Panic("CallAction: setNewNumber failed")
+				return ""
+			}
+			ChainNameToChainNum[a.Target] = n
+			return fmt.Sprintf("call %d", n)
+		}
 	}
 	return "// failed callAction: no filed RuleNumber or Target"
 }
