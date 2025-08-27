@@ -125,7 +125,9 @@ type endpointManager struct {
 	floatingIPsEnabled     bool
 
 	// Our dependencies.
-	allRuleset   IpfwRuleSet
+	rawRuleSet    IpfwRuleSet
+	mangleRuleSet IpfwRuleSet
+	filterRuleSet IpfwRuleSet
 	ruleRenderer rules.RuleRenderer
 	routeTable   routetable.RouteTableInterface
 	writeProcSys procSysWriter
@@ -206,7 +208,9 @@ type EndpointStatusUpdateCallback func(ipVersion uint8, id interface{}, status s
 type procSysWriter func(path, value string) error
 
 func newEndpointManager(
-	allRuleset IpfwRuleSet,
+	rawRuleSet IpfwRuleSet,
+	mangleRuleSet IpfwRuleSet,
+	filterRuleSet IpfwRuleSet,
 	ruleRenderer rules.RuleRenderer,
 	routeTable routetable.RouteTableInterface,
 	ipVersion uint8,
@@ -219,7 +223,9 @@ func newEndpointManager(
 	floatingIPsEnabled bool,
 ) *endpointManager {
 	return newEndpointManagerWithShims(
-		allRuleset,
+		rawRuleSet,
+		mangleRuleSet,
+		filterRuleSet,
 		ruleRenderer,
 		routeTable,
 		ipVersion,
@@ -236,7 +242,9 @@ func newEndpointManager(
 }
 
 func newEndpointManagerWithShims(
-	allRuleset IpfwRuleSet,
+	rawRuleSet IpfwRuleSet,
+	mangleRuleSet IpfwRuleSet,
+	filterRuleSet IpfwRuleSet,
 	ruleRenderer rules.RuleRenderer,
 	routeTable routetable.RouteTableInterface,
 	ipVersion uint8,
@@ -259,7 +267,9 @@ func newEndpointManagerWithShims(
 		kubeIPVSSupportEnabled: kubeIPVSSupportEnabled,
 		floatingIPsEnabled:     floatingIPsEnabled,
 
-		allRuleset:   allRuleset,
+		rawRuleSet:   rawRuleSet,
+		mangleRuleSet:   mangleRuleSet,
+		filterRuleSet:   filterRuleSet,
 		ruleRenderer: ruleRenderer,
 		routeTable:   routeTable,
 		writeProcSys: procSysWriter,
@@ -625,7 +635,7 @@ func (m *endpointManager) resolveWorkloadEndpoints() {
 
 	removeActiveWorkload := func(logCxt *log.Entry, oldWorkload *proto.WorkloadEndpoint, id proto.WorkloadEndpointID) {
 		m.callbacks.InvokeRemoveWorkload(oldWorkload)
-		m.allRuleset.RemoveChains(m.activeWlIDToChains[id])
+		m.filterRuleSet.RemoveChains(m.activeWlIDToChains[id])
 		delete(m.activeWlIDToChains, id)
 		if oldWorkload != nil {
 			m.epTagMapper.ReleaseEndpointTag(oldWorkload.Name)
@@ -793,7 +803,7 @@ func (m *endpointManager) resolveWorkloadEndpoints() {
 	if m.needToCheckDispatchChains {
 		// Rewrite the dispatch chains if they've changed.
 		newDispatchChains := m.ruleRenderer.WorkloadDispatchChains(m.activeWlEndpoints)
-		m.updateDispatchChains(m.activeWlDispatchChains, newDispatchChains, m.allRuleset)
+		m.updateDispatchChains(m.activeWlDispatchChains, newDispatchChains, m.filterRuleSet)
 		m.needToCheckDispatchChains = false
 
 		// Set flag to update endpoint mark chains.
@@ -834,7 +844,7 @@ func (m *endpointManager) updateWorkloadEndpointChains(
 		egressGroups,
 		workload.ProfileIds,
 	)
-	m.allRuleset.UpdateChains(chains)
+	m.filterRuleSet.UpdateChains(chains)
 	m.activeWlIDToChains[id] = chains
 }
 
@@ -872,13 +882,13 @@ func (m *endpointManager) updateRPFSkipChain() {
 			})
 		}
 	}
-	m.allRuleset.UpdateChain(chain)
+	m.rawRuleSet.UpdateChain(chain)
 }
 
 func (m *endpointManager) resolveEndpointTags() {
 	// Render endpoint mark chains for active workload and host endpoint.
 	newEndpointTagDispatchChains := m.ruleRenderer.EndpointTagDispatchChains(m.epTagMapper, m.activeWlEndpoints, m.activeIfaceNameToHostEpID)
-	m.updateDispatchChains(m.activeEPTagDispatchChains, newEndpointTagDispatchChains, m.allRuleset)
+	m.updateDispatchChains(m.activeEPTagDispatchChains, newEndpointTagDispatchChains, m.filterRuleSet)
 }
 
 func (m *endpointManager) resolveHostEndpoints() map[string]proto.HostEndpointID {
@@ -1089,7 +1099,7 @@ func (m *endpointManager) updateHostEndpoints() {
 		)
 
 		if !reflect.DeepEqual(filtChains, m.activeHostIfaceToFiltChains[ifaceName]) {
-			m.allRuleset.UpdateChains(filtChains)
+			m.filterRuleSet.UpdateChains(filtChains)
 		}
 		newHostIfaceFiltChains[ifaceName] = filtChains
 		delete(m.activeHostIfaceToFiltChains, ifaceName)
@@ -1100,7 +1110,7 @@ func (m *endpointManager) updateHostEndpoints() {
 			hostEp.ProfileIds,
 		)
 		if !reflect.DeepEqual(mangleChains, m.activeHostIfaceToMangleEgressChains[ifaceName]) {
-			m.allRuleset.UpdateChains(mangleChains)
+			m.mangleRuleSet.UpdateChains(mangleChains)
 		}
 		newHostIfaceMangleEgressChains[ifaceName] = mangleChains
 		delete(m.activeHostIfaceToMangleEgressChains, ifaceName)
@@ -1124,7 +1134,7 @@ func (m *endpointManager) updateHostEndpoints() {
 			ingressGroups,
 		)
 		if !reflect.DeepEqual(mangleChains, m.activeHostIfaceToMangleIngressChains[ifaceName]) {
-			m.allRuleset.UpdateChains(mangleChains)
+			m.mangleRuleSet.UpdateChains(mangleChains)
 		}
 		newHostIfaceMangleIngressChains[ifaceName] = mangleChains
 		delete(m.activeHostIfaceToMangleIngressChains, ifaceName)
@@ -1135,17 +1145,17 @@ func (m *endpointManager) updateHostEndpoints() {
 	for ifaceName, chains := range m.activeHostIfaceToFiltChains {
 		log.WithField("ifaceName", ifaceName).Info(
 			"Host interface no longer protected, deleting its normal chains.")
-		m.allRuleset.RemoveChains(chains)
+		m.filterRuleSet.RemoveChains(chains)
 	}
 	for ifaceName, chains := range m.activeHostIfaceToMangleEgressChains {
 		log.WithField("ifaceName", ifaceName).Info(
 			"Host interface no longer protected, deleting its mangle egress chains.")
-		m.allRuleset.RemoveChains(chains)
+		m.mangleRuleSet.RemoveChains(chains)
 	}
 	for ifaceName, chains := range m.activeHostIfaceToMangleIngressChains {
 		log.WithField("ifaceName", ifaceName).Info(
 			"Host interface no longer protected, deleting its preDNAT chains.")
-		m.allRuleset.RemoveChains(chains)
+		m.mangleRuleSet.RemoveChains(chains)
 	}
 
 	m.callbacks.InvokeInterfaceCallbacks(m.activeIfaceNameToHostEpID, newIfaceNameToHostEpID)
@@ -1179,7 +1189,7 @@ func (m *endpointManager) updateHostEndpoints() {
 		)
 
 		if !reflect.DeepEqual(rawChains, m.activeHostIfaceToRawChains[ifaceName]) {
-			m.allRuleset.UpdateChains(rawChains)
+			m.rawRuleSet.UpdateChains(rawChains)
 		}
 		newHostIfaceRawChains[ifaceName] = rawChains
 		delete(m.activeHostIfaceToRawChains, ifaceName)
@@ -1189,7 +1199,7 @@ func (m *endpointManager) updateHostEndpoints() {
 	for ifaceName, chains := range m.activeHostIfaceToRawChains {
 		log.WithField("ifaceName", ifaceName).Info(
 			"Host interface no longer protected, deleting its untracked chains.")
-		m.allRuleset.RemoveChains(chains)
+		m.rawRuleSet.RemoveChains(chains)
 	}
 
 	m.activeHostIfaceToRawChains = newHostIfaceRawChains
@@ -1218,7 +1228,7 @@ func (m *endpointManager) updateHostEndpoints() {
 	log.WithField("resolvedHostEpIds", newUntrackedIfaceNameToHostEpID).Debug("Rewrite raw dispatch chains?")
 	var newRawDispatchChains []*ipfw.Chain
 	newRawDispatchChains = m.ruleRenderer.HostDispatchChains(newUntrackedIfaceNameToHostEpID, "", false)
-	m.updateDispatchChains(m.activeHostRawDispatchChains, newRawDispatchChains, m.allRuleset)
+	m.updateDispatchChains(m.activeHostRawDispatchChains, newRawDispatchChains, m.rawRuleSet)
 
 	// Rewrite the filter dispatch chains if they've changed.
 	log.WithField("resolvedHostEpIds", newIfaceNameToHostEpID).Debug("Rewrite filter dispatch chains?")
@@ -1232,7 +1242,7 @@ func (m *endpointManager) updateHostEndpoints() {
 	}
 	newFilterDispatchChains := m.ruleRenderer.HostDispatchChains(newIfaceNameToHostEpID, defaultIfaceName, true)
 	newMangleEgressDispatchChains := m.ruleRenderer.ToHostDispatchChains(newIfaceNameToHostEpID, defaultIfaceName)
-	m.updateDispatchChains(m.activeHostFilterDispatchChains, newFilterDispatchChains, m.allRuleset)
+	m.updateDispatchChains(m.activeHostFilterDispatchChains, newFilterDispatchChains, m.filterRuleSet)
 	// Set flag to update endpoint mark chains.
 	m.needToCheckEndpointTagChains = true
 
@@ -1247,7 +1257,7 @@ func (m *endpointManager) updateHostEndpoints() {
 	}
 	newMangleIngressDispatchChains := m.ruleRenderer.FromHostDispatchChains(newPreDNATIfaceNameToHostEpID, defaultIfaceName)
 	newMangleDispatchChains := append(newMangleIngressDispatchChains, newMangleEgressDispatchChains...)
-	m.updateDispatchChains(m.activeHostMangleDispatchChains, newMangleDispatchChains, m.allRuleset)
+	m.updateDispatchChains(m.activeHostMangleDispatchChains, newMangleDispatchChains, m.mangleRuleSet)
 
 	log.Debug("Done resolving host endpoints.")
 }
@@ -1462,9 +1472,9 @@ func (m *endpointManager) increfGroups(groups []*rules.PolicyGroup) {
 		if refcnt == 0 {
 			// This group just became active.
 			chains := m.ruleRenderer.PolicyGroupToIpfwChains(group)
-			m.allRuleset.UpdateChains(chains)
-			m.allRuleset.UpdateChains(chains)
-			m.allRuleset.UpdateChains(chains)
+			m.filterRuleSet.UpdateChains(chains)
+			m.mangleRuleSet.UpdateChains(chains)
+			m.rawRuleSet.UpdateChains(chains)
 		}
 		m.policyChainRefCounts[group.ChainName()] = refcnt + 1
 	}
@@ -1479,9 +1489,9 @@ func (m *endpointManager) decrefGroups(chainNames []string) {
 		if refcnt == 1 {
 			// This chain just became inactive.
 			log.WithField("chainName", chainName).Debug("Policy group chain no longer referenced.  Removing chain.")
-			m.allRuleset.RemoveChainByName(chainName)
-			m.allRuleset.RemoveChainByName(chainName)
-			m.allRuleset.RemoveChainByName(chainName)
+			m.filterRuleSet.RemoveChainByName(chainName)
+			m.mangleRuleSet.RemoveChainByName(chainName)
+			m.rawRuleSet.RemoveChainByName(chainName)
 			delete(m.policyChainRefCounts, chainName)
 			continue
 		}

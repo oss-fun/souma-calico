@@ -29,7 +29,9 @@ import (
 // policyManager simply renders policy/profile updates into ipfw.Chain objects and sends
 // them to the dataplane layer.
 type policyManager struct {
-	ruleset          IpfwRuleSet
+	rawRuleSet       IpfwRuleSet
+	mangleRuleSet    IpfwRuleSet
+	filterRuleSet    IpfwRuleSet
 	ruleRenderer     policyRenderer
 	ipVersion        uint8
 	rawEgressOnly    bool
@@ -43,18 +45,22 @@ type policyRenderer interface {
 	ProfileToIpfwChains(profileID *proto.ProfileID, policy *proto.Profile, ipVersion uint8) (inbound, outbound *ipfw.Chain)
 }
 
-func newPolicyManager(ruleset IpfwRuleSet, ruleRenderer policyRenderer, ipVersion uint8) *policyManager {
+func newPolicyManager(rawRuleSet, mangleRuleSet, filterRuleSet IpfwRuleSet, ruleRenderer policyRenderer, ipVersion uint8) *policyManager {
 	return &policyManager{
-		ruleset:      ruleset,
-		ruleRenderer: ruleRenderer,
-		ipVersion:    ipVersion,
+		rawRuleSet:    rawRuleSet,
+		mangleRuleSet: mangleRuleSet,
+		filterRuleSet: filterRuleSet,
+		ruleRenderer:  ruleRenderer,
+		ipVersion:     ipVersion,
 	}
 }
 
-func newRawEgressPolicyManager(rawTable IpfwRuleSet, ruleRenderer policyRenderer, ipVersion uint8,
+func newRawEgressPolicyManager(rawRuleSet IpfwRuleSet, ruleRenderer policyRenderer, ipVersion uint8,
 	ipfwTableCallback func(neededIpfwTable set.Set[string])) *policyManager {
 	return &policyManager{
-		ruleset:   ipfw.NewNoopRuleSet(),
+		rawRuleSet:    rawRuleSet,
+		mangleRuleSet: ipfw.NewNoopRuleSet(),
+		filterRuleSet: ipfw.NewNoopRuleSet(),
 		ruleRenderer:  ruleRenderer,
 		ipVersion:     ipVersion,
 		rawEgressOnly: true,
@@ -90,7 +96,9 @@ func (m *policyManager) OnUpdate(msg interface{}) {
 		// We can't easily tell whether the policy is in use in a particular table, and, if the policy
 		// type gets changed it may move between tables.  Hence, we put the policy into all tables.
 		// The ipfw layer will avoid programming it if it is not actually used.
-		m.ruleset.UpdateChains(chains)
+		m.rawRuleSet.UpdateChains(chains)
+		m.mangleRuleSet.UpdateChains(chains)
+		m.filterRuleSet.UpdateChains(chains)
 	case *proto.ActivePolicyRemove:
 		log.WithField("id", msg.Id).Debug("Removing policy chains")
 		m.cleanUpPolicy(msg.Id)
@@ -101,13 +109,15 @@ func (m *policyManager) OnUpdate(msg interface{}) {
 		}
 		log.WithField("id", msg.Id).Debug("Updating profile chains")
 		inbound, outbound := m.ruleRenderer.ProfileToIpfwChains(msg.Id, msg.Profile, m.ipVersion)
-		m.ruleset.UpdateChains([]*ipfw.Chain{inbound, outbound})
+		m.filterRuleSet.UpdateChains([]*ipfw.Chain{inbound, outbound})
+		m.mangleRuleSet.UpdateChains([]*ipfw.Chain{outbound})
 	case *proto.ActiveProfileRemove:
 		log.WithField("id", msg.Id).Debug("Removing profile chains")
 		inName := rules.ProfileChainName(rules.ProfileInboundPfx, msg.Id)
 		outName := rules.ProfileChainName(rules.ProfileOutboundPfx, msg.Id)
-		m.ruleset.RemoveChainByName(inName)
-		m.ruleset.RemoveChainByName(outName)
+		m.filterRuleSet.RemoveChainByName(inName)
+		m.filterRuleSet.RemoveChainByName(outName)
+		m.mangleRuleSet.RemoveChainByName(outName)
 	}
 }
 
@@ -118,8 +128,12 @@ func (m *policyManager) cleanUpPolicy(id *proto.PolicyID) {
 	inName := rules.PolicyChainName(rules.PolicyInboundPfx, id)
 	outName := rules.PolicyChainName(rules.PolicyOutboundPfx, id)
 	// As above, we need to clean up in all the tables.
-	m.ruleset.RemoveChainByName(inName)
-	m.ruleset.RemoveChainByName(outName)
+	m.filterRuleSet.RemoveChainByName(inName)
+	m.filterRuleSet.RemoveChainByName(outName)
+	m.mangleRuleSet.RemoveChainByName(inName)
+	m.mangleRuleSet.RemoveChainByName(outName)
+	m.rawRuleSet.RemoveChainByName(inName)
+	m.rawRuleSet.RemoveChainByName(outName)
 }
 
 func (m *policyManager) updateNeededIpfwTable(id *proto.PolicyID, neededIpfwTable set.Set[string]) {

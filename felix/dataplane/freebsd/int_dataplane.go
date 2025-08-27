@@ -224,7 +224,11 @@ type InternalDataplane struct {
 	sendDataplaneInSyncOnce sync.Once
 
 	allIpfwRuleSet    []*ipfw.RuleSet
-	ipfwTable          []common.IpfwTableDataplane
+	ipfwMangleRuleSet []*ipfw.RuleSet
+	ipfwNATRuleSet    []*ipfw.RuleSet
+	ipfwRawRuleSet    []*ipfw.RuleSet
+	ipfwFilterRuleSet []*ipfw.RuleSet
+	ipfwTable         []common.IpfwTableDataplane
 
 	ifaceMonitor *ifacemonitor.InterfaceMonitor
 	ifaceUpdates chan any
@@ -299,6 +303,7 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 	// rules/rule_def.go
 	ruleRenderer := rules.NewRenderer(config.RulesConfig)
 
+	// TagMapper
 	epTagMapper := rules.NewEndpointTagMapper(config.RulesConfig.IpfwTagNonCaliEndpoint)
 
 	// Auto-detect host MTU.
@@ -332,9 +337,10 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 	dp.ifaceMonitor.AddrCallback = dp.onIfaceAddrsChange
 	dp.ifaceMonitor.InSyncCallback = dp.onIfaceInSync
 
+	// BackEndを選定
 	backendMode := environment.DetectBackend(config.LookPathOverride, cmdshim.NewRealCmd, config.IpfwBackend)
 
-	// Most ipfw tables need the same options.
+	// Most ipfw RuleSet need the same options.
 	ipfwOptions := ipfw.RulesetOptions{
 		HistoricChainPrefixes: rules.AllHistoricChainNamePrefixes,
 		RefreshInterval:       config.IpfwRefreshInterval,
@@ -344,6 +350,13 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 		BackendMode:           backendMode,
 		OnStillAlive:          dp.reportHealth,
 		OpRecorder:            dp.loopSummarizer,
+	}
+
+	ipfwNATOptions := ipfwOptions
+	if ipfwNATOptions.ExtraCleanupRegexPattern == "" {
+		ipfwNATOptions.ExtraCleanupRegexPattern = rules.HistoricInsertedNATRuleRegex
+	} else {
+		ipfwNATOptions.ExtraCleanupRegexPattern += "|" + rules.HistoricInsertedNATRuleRegex
 	}
 
 	var ipfwLock sync.Locker
@@ -360,16 +373,44 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 		)
 	}
 
-	allRulesetV4 := ipfw.NewRuleSet(
-		"all",
+	mangleRuleSetV4 := ipfw.NewRuleSet(
+		"mangle",
 		4,
 		rules.RuleHashPrefix,
 		ipfwLock,
 		featureDetector,
-		ipfwOptions)
+		ipfwOptions,
+	)
+	natRuleSetV4 := ipfw.NewRuleSet(
+		"nat",
+		4,
+		rules.RuleHashPrefix,
+		ipfwLock,
+		featureDetector,
+		ipfwNATOptions,
+	)
+	rawRuleSetV4 := ipfw.NewRuleSet(
+		"raw",
+		4,
+		rules.RuleHashPrefix,
+		ipfwLock,
+		featureDetector,
+		ipfwOptions,
+	)
+	filterRuleSetV4 := ipfw.NewRuleSet(
+		"filter",
+		4,
+		rules.RuleHashPrefix,
+		ipfwLock,
+		featureDetector,
+		ipfwOptions,
+	)
 	ipfwtableConfigV4 := config.RulesConfig.IpfwTableConfigV4
 	ipfwTableV4 := ipfwtable.NewIpfwTable(ipfwtableConfigV4, dp.loopSummarizer)
-	dp.allIpfwRuleSet = append(dp.allIpfwRuleSet, allRulesetV4)
+	dp.ipfwNATRuleSet = append(dp.ipfwNATRuleSet, natRuleSetV4)
+	dp.ipfwRawRuleSet = append(dp.ipfwRawRuleSet, rawRuleSetV4)
+	dp.ipfwNATRuleSet = append(dp.ipfwMangleRuleSet, mangleRuleSetV4)
+	dp.ipfwNATRuleSet = append(dp.ipfwFilterRuleSet, filterRuleSetV4)
 	dp.ipfwTable = append(dp.ipfwTable, ipfwTableV4)
 
 	dp.endpointStatusCombiner = newEndpointStatusCombiner(dp.fromDataplane, config.IPv6Enabled)
@@ -386,7 +427,7 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 		rules.IpfwTableIDThisHostIPs,
 		ipfwTableV4,
 		config.MaxIpfwTableSize))
-	dp.RegisterManager(newPolicyManager(allRulesetV4, ruleRenderer, 4))
+	dp.RegisterManager(newPolicyManager(rawRuleSetV4, mangleRuleSetV4, filterRuleSetV4, ruleRenderer, 4))
 
 	interfaceRegexes := make([]string, len(config.RulesConfig.WorkloadIfacePrefixes))
 	for i, r := range config.RulesConfig.WorkloadIfacePrefixes {
@@ -407,7 +448,9 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 	}
 
 	epManager := newEndpointManager(
-		allRulesetV4,
+		rawRuleSetV4,
+		mangleRuleSetV4,
+		filterRuleSetV4,
 		ruleRenderer,
 		routeTableV4,
 		4,
@@ -420,10 +463,30 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 		config.FloatingIPsEnabled,
 	)
 	dp.RegisterManager(epManager)
-	dp.RegisterManager(newFloatingIPManager(allRulesetV4, ruleRenderer, 4, config.FloatingIPsEnabled))
-	dp.RegisterManager(newMasqManager(ipfwTableV4, allRulesetV4, ruleRenderer, config.MaxIpfwTableSize, 4))
+	dp.RegisterManager(newFloatingIPManager(natRuleSetV4, ruleRenderer, 4, config.FloatingIPsEnabled))
+	dp.RegisterManager(newMasqManager(ipfwTableV4, natRuleSetV4, ruleRenderer, config.MaxIpfwTableSize, 4))
 	
-	dp.RegisterManager(newServiceLoopManager(allRulesetV4, ruleRenderer, 4))
+	dp.RegisterManager(newServiceLoopManager(filterRuleSetV4, ruleRenderer, 4))
+
+	// Register that we will report liveness and readiness.
+	if config.HealthAggregator != nil {
+		log.Info("Registering to report health.")
+		timeout := config.WatchdogTimeout
+		if timeout < healthInterval*2 {
+			log.Warnf("Dataplane watchdog timeout (%v) too low, defaulting to %v", timeout, healthInterval*2)
+			timeout = healthInterval * 2
+		}
+		config.HealthAggregator.RegisterReporter(
+			healthName,
+			&health.HealthReport{Live: true, Ready: true},
+			timeout,
+		)
+	}
+
+	dp.allIpfwRuleSet = append(dp.allIpfwRuleSet, dp.ipfwMangleRuleSet...)
+	dp.allIpfwRuleSet = append(dp.allIpfwRuleSet, dp.ipfwNATRuleSet...)
+	dp.allIpfwRuleSet = append(dp.allIpfwRuleSet, dp.ipfwFilterRuleSet...)
+	dp.allIpfwRuleSet = append(dp.allIpfwRuleSet, dp.ipfwRawRuleSet...)
 
 	// Register that we will report liveness and readiness.
 	if config.HealthAggregator != nil {
