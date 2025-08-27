@@ -183,13 +183,11 @@ func SetNewNumber() (uint16, error) {
 			result = n
 		}
 	}
-	fmt.Printf("[souma-log] SetNewNumber(): %v\n", result)
 	result = result + RULE_BUF
 	if result >= 65535 {
 		return 0, fmt.Errorf("No Enough Chain Num")
 	}
 
-	fmt.Printf("[souma-log] SetNewNumber(): %v\n", result)
 	return result, nil
 }
 

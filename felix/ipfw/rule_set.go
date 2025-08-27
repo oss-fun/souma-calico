@@ -3,7 +3,6 @@
 package ipfw
 
 import (
-	"bufio"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
@@ -508,6 +507,7 @@ func (t *RuleSet) attemptToGetHashesAndRulesFromDataplane() (hashes map[string][
 		}
 		return
 	}
+	//outBytes, _ := io.ReadAll(stdout)
 	hashes, rules, err = t.readHashesAndRulesFrom(stdout)
 	if err != nil {
 		// In case readHashesAndRulesFrom() returned due to an error that didn't cause the
@@ -534,9 +534,14 @@ func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]s
 	hashes = make(map[string][]string)
 	rules = make(map[string][]string)
 
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	lines := strings.Split(string(data), "\n")
+
+	for _, line := range lines {
 		if line == "" {
 			continue
 		}
@@ -565,10 +570,6 @@ func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]s
 
 		h := sha1.Sum([]byte(ruleText))
 		hashes[chainName] = append(hashes[chainName], hex.EncodeToString(h[:8]))
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, nil, err
 	}
 
 	return hashes, rules, nil
