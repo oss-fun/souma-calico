@@ -820,7 +820,8 @@ func (t *RuleSet) applyUpdates() error {
 	t.dirtyChains.Iter(func(chainName string) error {
 		if _, ok := t.desiredStateOfChain(chainName); !ok {
 			// Chain deletion
-			buf.WriteLine(fmt.Sprintf("ipfw delete %d", ChainNameToChainNum[chainName]))
+			// TODO
+			//buf.WriteLine(fmt.Sprintf("ipfw delete %d", ChainNameToChainNum[chainName]))
 			newHashes[chainName] = nil
 		}
 		return nil // Delay clearing the set until we've programmed ipfw.

@@ -105,6 +105,7 @@ func (b *RestoreInputBuilder) maybeWriteTransactionOpener() {
 // transaction.
 func (b *RestoreInputBuilder) WriteForwardReference(chainName string) {
 	b.maybeWriteTransactionOpener()
+	// TODO
 	//b.writeFormattedLine(":%s - -", chainName)
 }
 

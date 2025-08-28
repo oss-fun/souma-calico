@@ -33,9 +33,15 @@ func (r *DefaultRuleRenderer) PolicyToIpfwChains(policyID *proto.PolicyID, polic
 		Name:  PolicyChainName(PolicyInboundPfx, policyID),
 		Rules: r.ProtoRulesToIpfwRules(policy.InboundRules, ipVersion, fmt.Sprintf("Policy %s ingress", policyID.Name)),
 	}
+	if err := inbound.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed inbound Organize")
+	}
 	outbound := ipfw.Chain{
 		Name:  PolicyChainName(PolicyOutboundPfx, policyID),
 		Rules: r.ProtoRulesToIpfwRules(policy.OutboundRules, ipVersion, fmt.Sprintf("Policy %s egress", policyID.Name)),
+	}
+	if err := outbound.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed outbound Organize")
 	}
 	return []*ipfw.Chain{&inbound, &outbound}
 }
@@ -45,9 +51,15 @@ func (r *DefaultRuleRenderer) ProfileToIpfwChains(profileID *proto.ProfileID, pr
 		Name:  ProfileChainName(ProfileInboundPfx, profileID),
 		Rules: r.ProtoRulesToIpfwRules(profile.InboundRules, ipVersion, fmt.Sprintf("Profile %s ingress", profileID.Name)),
 	}
+	if err := inbound.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed inbound Organize")
+	}
 	outbound = &ipfw.Chain{
 		Name:  ProfileChainName(ProfileOutboundPfx, profileID),
 		Rules: r.ProtoRulesToIpfwRules(profile.OutboundRules, ipVersion, fmt.Sprintf("Profile %s egress", profileID.Name)),
+	}
+	if err := outbound.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed outbound Organize")
 	}
 	return
 }
@@ -454,9 +466,9 @@ const (
 func (sod srcOrDst) MatchNet(cidr string) ipfw.MatchCriteria {
 	switch sod {
 	case src:
-		return ipfw.Match().SourceNet(cidr)
+		return ipfw.Match().SourceNet(cidr).DestNet("any")
 	case dst:
-		return ipfw.Match().DestNet(cidr)
+		return ipfw.Match().SourceNet("any").DestNet(cidr)
 	}
 	log.WithField("srcOrDst", sod).Panic("Unknown source or dest type.")
 	return nil

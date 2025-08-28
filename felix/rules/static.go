@@ -344,10 +344,14 @@ func (r *DefaultRuleRenderer) filterWorkloadToHostChain(ipVersion uint8) *Chain 
 		})
 	}
 
-	return &Chain{
+	result := &Chain{
 		Name:  ChainWorkloadToHost,
 		Rules: rules,
 	}
+	if err := result.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed filterWorkloadToHostChain result Organize")
+	}
+	return result
 }
 
 func (r *DefaultRuleRenderer) failsafeInChain(table string, ipVersion uint8) *Chain {
@@ -716,10 +720,16 @@ func (r *DefaultRuleRenderer) StaticNATPostroutingChains(ipVersion uint8) []*Cha
 			Action: NatAction{},
 		})
 	}
-	return []*Chain{{
+	results := []*Chain{{
 		Name:  ChainNATPostrouting,
 		Rules: rules,
 	}}
+	for _, v := range results {
+		if err := v.Organize(); err != nil {
+			log.WithField("err", err).Panic("Failed StaticNATPostroutingChains result Organize")
+		}
+	}
+	return results
 }
 
 func (r *DefaultRuleRenderer) StaticNATOutputChains(ipVersion uint8) []*Chain {
@@ -729,10 +739,16 @@ func (r *DefaultRuleRenderer) StaticNATOutputChains(ipVersion uint8) []*Chain {
 		},
 	}
 
-	return []*Chain{{
+	results := []*Chain{{
 		Name:  ChainNATOutput,
 		Rules: rules,
 	}}
+	for _, v := range results {
+		if err := v.Organize(); err != nil {
+			log.WithField("err", err).Panic("Failed StaticNATOutputChains result Organize")
+		}
+	}
+	return results
 }
 
 func (r *DefaultRuleRenderer) StaticMangleTableChains(ipVersion uint8) []*Chain {
