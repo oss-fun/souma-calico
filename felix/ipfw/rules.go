@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"strings"
 	"strconv"
+	"regexp"
 
 	log "github.com/sirupsen/logrus"
 
@@ -33,17 +34,33 @@ type Rule struct {
 func (r Rule) RenderRaw(prefixFragment string) string {
 	fragments := []string{}
 	fragments = append(fragments, append(cmdshim.ADD_COMMAND, strconv.Itoa(int(r.Number)))...)
-	return r.renderInner(fragments, prefixFragment)
+	return r.renderInner(fragments, prefixFragment, nil)
 }
 
-func (r Rule) RenderAppend(chain Chain, prefixFragment string) string {
+func (r Rule) RenderAppend(chainName, prefixFragment string, features *environment.Features) string {
 	fragments := []string{}
-	ruleNum := strconv.Itoa(int(chain.GetStartRuleNum()))
+	ruleNum := strconv.Itoa(int(ChainNameToChainNum[chainName]))
 	fragments = append(fragments, append(cmdshim.ADD_COMMAND, ruleNum)...)
-	return r.renderInner(fragments, prefixFragment)
+	return r.renderInner(fragments, prefixFragment, features)
 }
 
-func (r Rule) renderInner(fragments []string, prefixFragment string) string {
+func (r Rule) RenderReplace(chainName string, ruleNum uint16, prefixFragment string, features *environment.Features) string {
+	// ルール番号の特定
+	chainNum := ChainNameToChainNum[chainName]
+	target := chainNum + ruleNum - 1
+
+	// 既存のルールを削除するコマンド生成
+	delRule := fmt.Sprintf("ipfw delete %d", target)
+
+	// 新しいルールを追加するコマンド生成
+	fragments := []string{}
+	fragments = append(fragments, append(cmdshim.ADD_COMMAND, strconv.Itoa(int(target)))...)
+	newRule := r.renderInner(fragments, prefixFragment, features)
+
+	return fmt.Sprintf("%s\n%s", delRule, newRule)
+}
+
+func (r Rule) renderInner(fragments []string, prefixFragment string, features *environment.Features) string {
 	if r.Action != nil {
 		actionFragment := r.Action.String()
 		if actionFragment != "" {
@@ -66,6 +83,21 @@ func (r Rule) renderInner(fragments []string, prefixFragment string) string {
 		fragments = append(fragments, prefixFragment)
 	}
 	return strings.Join(fragments, " ")
+}
+
+var shellUnsafe = regexp.MustCompile(`[^\w @%+=:,./-#]`)
+
+func escapeComment(s string) string {
+	return shellUnsafe.ReplaceAllString(s, "_")
+}
+
+const maxCommentLen = 256
+
+func truncateComment(s string) string {
+	if len(s) > maxCommentLen {
+		return s[0:maxCommentLen]
+	}
+	return s
 }
 
 type Chain struct {
@@ -103,7 +135,7 @@ func (c *Chain) RuleHashes(features *environment.Features) []string {
 				"chain":    c.Name,
 			}).WithError(err).Panic("Failed to write suffix to hash.")
 		}
-		ruleForHashing := rule.RenderAppend(*c, "HASH")
+		ruleForHashing := rule.RenderAppend(c.Name, "HASH", features)
 		_, err = s.Write([]byte(ruleForHashing))
 		if err != nil {
 			log.WithFields(log.Fields{
@@ -162,11 +194,15 @@ func (c *Chain) Organize() error {
 		}
 	}
 	ChainNameToChainNum[c.Name] = start
+	c.Number = start
+	fmt.Printf("[souma-log] name: %s\n", c.Name)
+	fmt.Printf("[souma-log] number: %d\n", c.Number)
 
 	// rule番号の生成
 	for i, r := range c.Rules {
-		r.Number = start + uint16(i)
+		r.Number = c.Number + uint16(i)
 	}
+	fmt.Printf("[souma-log] rules: %v\n", c.Rules)
 
 	return nil
 }
@@ -195,6 +231,10 @@ func (c *Chain) GetFinRuleNum() uint16 {
 	return c.Rules[len(c.Rules)-1].Number
 }
 
+func (c *Chain) GetNextRuleNum() uint16 {
+	return c.GetFinRuleNum()+1
+}
+
 func (c *Chain) IpfwTableNames() (ipfwTableNames []string) {
 	if c == nil {
 		return nil
@@ -205,6 +245,7 @@ func (c *Chain) IpfwTableNames() (ipfwTableNames []string) {
 	return
 }
 
+// 独自実装（必要か確認中）
 func RulesToRestoreFile(rules []Rule, path string) error {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {
@@ -226,6 +267,7 @@ func RulesToRestoreFile(rules []Rule, path string) error {
 	return nil
 }
 
+// 独自実装（必要か確認中）
 func BytesToRestoreFile(rules []byte, path string) error {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {

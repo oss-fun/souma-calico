@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sync"
 	"strings"
+	"strconv"
 	"reflect"
 	"os"
 	"os/exec"
@@ -31,8 +32,17 @@ const (
 )
 
 var (
-	chainCreateRegexp = regexp.MustCompile(`^:(\S+)`)
-	appendRegexp = regexp.MustCompile(`^-A (\S+)`)
+	// List of all the top-level kernel-created chains by iptables table.
+	tableToKernelChains = map[string][]string{
+		"filter": {"INPUT", "FORWARD", "OUTPUT"},
+		"nat":    {"PREROUTING", "INPUT", "OUTPUT", "POSTROUTING"},
+		"mangle": {"PREROUTING", "INPUT", "FORWARD", "OUTPUT", "POSTROUTING"},
+		"raw":    {"PREROUTING", "OUTPUT"},
+	}
+
+	// TODO
+	// chainCreateRegexp = regexp.MustCompile(`^// (\S+)`)
+	// appendRegexp = regexp.MustCompile(`add (\S+)`)
 
 	countNumRestoreCalls = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "felix_ipfw_restore_calls",
@@ -118,7 +128,7 @@ type RuleSet struct {
 
 	calicoIpfwLock sync.Locker
 
-	lockTimeout time.Duration
+	lockTimeout       time.Duration
 	lockProbeInterval time.Duration
 
 	logCxt               *log.Entry
@@ -184,15 +194,27 @@ func NewRuleSet(
 	log.WithField("pattern", oldInsertPattern).Info("Calculated old-insert detection regex.")
 	oldInsertRegexp := regexp.MustCompile(oldInsertPattern)
 
-	appends := map[string][]Rule{}
 	inserts := map[string][]Rule{}
+	appends := map[string][]Rule{}
 	dirtyAppend := set.New[string]()
 	refcounts := map[string]int{}
-	appends["all"] = []Rule{}
-	dirtyAppend.Add("all")
-	refcounts["all"] += 1
+	for _, kernelChain := range tableToKernelChains[name] {
+		inserts[kernelChain] = []Rule{}
+		appends[kernelChain] = []Rule{}
+		dirtyAppend.Add(kernelChain)
+		// Kernel chains are referred to by definition.
+		refcounts[kernelChain] += 1
+	}
 
-	insertMode := "append"
+	var insertMode string
+	switch options.InsertMode {
+		case "", "insert":
+		insertMode = "insert"
+	case "append":
+		insertMode = "append"
+	default:
+		log.WithField("insertMode", options.InsertMode).Panic("Unknown insert mode")
+	}
 
 	if options.PostWriteInterval <= minPostWriteInterval {
 		log.WithFields(log.Fields{
@@ -227,9 +249,9 @@ func NewRuleSet(
 		Name:                   name,
 		IPVersion:              ipVersion,
 		featureDetector:        featureDetector,
-		chainToAppendedRules:   appends,
 		chainToInsertedRules:   inserts,
-		dirtyAppend:      dirtyAppend,
+		chainToAppendedRules:   appends,
+		dirtyAppend:            dirtyAppend,
 		chainNameToChain:       map[string]*Chain{},
 		chainRefCounts:         refcounts,
 		dirtyChains:            set.New[string](),
@@ -269,6 +291,8 @@ func NewRuleSet(
 	}
 	ruleset.restoreInputBuffer.NumLinesWritten = ruleset.countNumLinesExecuted
 
+	// TODO
+	/*
 	ruleset.chainNameToChain["INPUT"] = &Chain{
 		Name: "INPUT",
 		Number: 10,
@@ -284,6 +308,7 @@ func NewRuleSet(
 		Number: 30,
 		Rules: []Rule{},
 	}
+	*/
 
 	if options.OnStillAlive != nil {
 		ruleset.onStillAlive = options.OnStillAlive
@@ -298,14 +323,157 @@ func NewRuleSet(
 	return ruleset
 }
 
+// Chainへのルール追加
+// ・chainToAppendedRulesの更新
+func (t *RuleSet) InsertOrAppendRules(chainName string, rules []Rule) {
+	t.logCxt.WithField("chainName", chainName).Debug("Updating rule insertions")
+	// 古いルールの取得
+	oldRules := t.chainToInsertedRules[chainName]
+	// 新しいルールを保存
+	t.chainToInsertedRules[chainName] = rules
+	// ルール数の更新
+	numRulesDelta := len(rules) - len(oldRules)
+	t.gaugeNumRules.Add(float64(numRulesDelta))
+	// 次回Apply時に反映するためのマーキング
+	t.dirtyAppend.Add(chainName)
+
+	// 参照数などの管理
+	t.maybeIncrefReferredChains(chainName, rules)
+	t.maybeDecrefReferredChains(chainName, oldRules)
+
+	// 再チェックと更新を促すためのキャシュ無効化
+	t.InvalidateDataplaneCache("insertion")
+}
+
+// Chainへのルール追加（Append版）
+// 使うmapが違う
+func (t *RuleSet) AppendRules(chainName string, rules []Rule) {
+	t.logCxt.WithField("chainName", chainName).Debug("Updating rule appends")
+	oldRules := t.chainToAppendedRules[chainName]
+	t.chainToAppendedRules[chainName] = rules
+	numRulesDelta := len(rules) - len(oldRules)
+	t.gaugeNumRules.Add(float64(numRulesDelta))
+	t.dirtyAppend.Add(chainName)
+
+	t.maybeIncrefReferredChains(chainName, rules)
+	t.maybeDecrefReferredChains(chainName, oldRules)
+
+	t.InvalidateDataplaneCache("insertion")
+}
+
+func (t *RuleSet) UpdateChains(chains []*Chain) {
+	for _, chain := range chains {
+		t.UpdateChain(chain)
+	}
+}
+
+// Chainの登録
+// ・chainNameToChainの登録
+// ・dirtyChainsへの登録
+func (t *RuleSet) UpdateChain(chain *Chain) {
+	t.logCxt.WithField("chainName", chain.Name).Debug("Adding chain to available set.")
+	oldNumRules := 0
+
+	t.maybeIncrefReferredChains(chain.Name, chain.Rules)
+	if oldChain := t.chainNameToChain[chain.Name]; oldChain != nil {
+		oldNumRules = len(oldChain.Rules)
+		t.maybeDecrefReferredChains(chain.Name, oldChain.Rules)
+	}
+	// chainNameToChainの登録
+	t.chainNameToChain[chain.Name] = chain
+	// ChainNameToChainNumの登録
+	ChainNameToChainNum[chain.Name] = chain.GetStartRuleNum()
+	if chain.GetStartRuleNum() == 65535 {
+		t.logCxt.WithField("chainName", chain.Name).Panic("Failed GetStartRuleNum")
+	}
+	numRulesDelta := len(chain.Rules) - oldNumRules
+	t.gaugeNumRules.Add(float64(numRulesDelta))
+	if t.chainIsReferenced(chain.Name) {
+		// dirtyChainsへの登録
+		t.dirtyChains.Add(chain.Name)
+
+		t.InvalidateDataplaneCache("chain update")
+	}
+}
+
+func (t *RuleSet) RemoveChains(chains []*Chain) {
+	for _, chain := range chains {
+		t.RemoveChainByName(chain.Name)
+	}
+}
+
+func (t *RuleSet) RemoveChainByName(name string) {
+	t.logCxt.WithField("chainName", name).Debug("Removing chain from available set.")
+	if oldChain, known := t.chainNameToChain[name]; known {
+		t.gaugeNumRules.Sub(float64(len(oldChain.Rules)))
+		t.maybeDecrefReferredChains(name, oldChain.Rules)
+		delete(t.chainNameToChain, name)
+		if t.chainIsReferenced(name) {
+			t.dirtyChains.Add(name)
+
+			t.InvalidateDataplaneCache("chain removal")
+		}
+	}
+}
+
 func (t *RuleSet) chainIsReferenced(name string) bool {
 	return t.chainRefCounts[name] > 0
+}
+
+func (t *RuleSet) maybeIncrefReferredChains(chainName string, rules []Rule) {
+	if !t.chainIsReferenced(chainName) {
+		return
+	}
+	for _, r := range rules {
+		if ref, ok := r.Action.(Referrer); ok {
+			t.increfChain(ref.ReferencedChain())
+		}
+	}
 }
 
 func (t *RuleSet) maybeDecrefReferredChains(chainName string, rules []Rule) {
 	if !t.chainIsReferenced(chainName) {
 		return
 	}
+	for _, r := range rules {
+		if ref, ok := r.Action.(Referrer); ok {
+			t.decrefChain(ref.ReferencedChain())
+		}
+	}
+}
+
+func (t *RuleSet) increfChain(chainName string) {
+	log.WithField("chainName", chainName).Debug("Incref chain")
+	t.chainRefCounts[chainName] += 1
+	if t.chainRefCounts[chainName] == 1 {
+		t.updateRateLimitedLog.WithField("chainName", chainName).Info("Chain became referenced, marking it for programming")
+		t.dirtyChains.Add(chainName)
+		if chain := t.chainNameToChain[chainName]; chain != nil {
+			// Recursively incref chains that this chain refers to.  If
+			// chain == nil then the chain is likely about to be added, in
+			// which case we'll handle this whe the chain is added.
+			t.maybeIncrefReferredChains(chainName, chain.Rules)
+		}
+	}
+}
+
+func (t *RuleSet) decrefChain(chainName string) {
+	log.WithField("chainName", chainName).Debug("Decref chain")
+	if t.chainRefCounts[chainName] == 1 {
+		t.updateRateLimitedLog.WithField("chainName", chainName).Info("Chain no longer referenced, marking it for removal")
+		if chain := t.chainNameToChain[chainName]; chain != nil {
+			// Recursively decref chains that this chain refers to.  If
+			// chain == nil then the chain has probably already been deleted
+			// in which case we'll already have done the decrefs.
+			t.maybeDecrefReferredChains(chainName, chain.Rules)
+		}
+		delete(t.chainRefCounts, chainName)
+		t.dirtyChains.Add(chainName)
+		return
+	}
+
+	// Chain still referenced, just decrement.
+	t.chainRefCounts[chainName] -= 1
 }
 
 func (t *RuleSet) loadDataplaneState() {
@@ -507,7 +675,6 @@ func (t *RuleSet) attemptToGetHashesAndRulesFromDataplane() (hashes map[string][
 		}
 		return
 	}
-	//outBytes, _ := io.ReadAll(stdout)
 	hashes, rules, err = t.readHashesAndRulesFrom(stdout)
 	if err != nil {
 		// In case readHashesAndRulesFrom() returned due to an error that didn't cause the
@@ -530,6 +697,8 @@ func (t *RuleSet) attemptToGetHashesAndRulesFromDataplane() (hashes map[string][
 	return
 }
 
+// TODO
+// 独自実装
 func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]string, rules map[string][]string, err error) {
 	hashes = make(map[string][]string)
 	rules = make(map[string][]string)
@@ -634,7 +803,7 @@ func (t *RuleSet) Apply() (rescheduleAfter time.Duration) {
 				continue
 			} else {
 				t.logCxt.WithError(err).Error("Failed to program ipfw, loading diags before panic.")
-				cmd := t.newCmd(t.ipfwCmd)
+				cmd := t.newCmd(t.ipfwCmd, "list")
 				output, err2 := cmd.Output()
 				if err2 != nil {
 					t.logCxt.WithError(err2).Error("Failed to load ipfw state")
@@ -704,7 +873,6 @@ func (t *RuleSet) applyUpdates() error {
 			// Chain update or creation.  Scan the chain against its previous hashes
 			// and replace/append/delete as appropriate.
 			var previousHashes []string
-			// In ipfw legacy mode, we compare the rules one by one and apply deltas rule by rule.
 			previousHashes = t.chainToDataplaneHashes[chainName]
 
 			currentHashes := chain.RuleHashes(features)
@@ -712,18 +880,20 @@ func (t *RuleSet) applyUpdates() error {
 			for i := 0; i < len(previousHashes) || i < len(currentHashes); i++ {
 				var line string
 				if i < len(previousHashes) && i < len(currentHashes) {
-					// RenderReplace not supported
+					if previousHashes[i] == currentHashes[i] {
+						continue
+					}
+					// Hash doesn't match, replace the rule.
+					ruleNum := i + 1 // 1-indexed.
+					prefixFrag := t.commentFrag(currentHashes[i])
+					line = chain.Rules[i].RenderReplace(chainName, uint16(ruleNum), prefixFrag, features)
 				} else if i < len(previousHashes) {
 					// renderDeleteByIndexLine not supported
+					t.logCxt.Debug("renderDeleteByIndexLine not supported")
 				} else {
 					// currentHashes was longer.  Append.
 					prefixFrag := t.commentFrag(currentHashes[i])
-					chainPtr, ok := t.chainNameToChain[chainName]
-					if !ok || chainPtr == nil {
-						t.logCxt.WithField("chainName", chainName).Error("chainName not found or nil in chainNameToChain")
-						continue
-					}
-					line = chain.Rules[i].RenderAppend(*chainPtr, prefixFrag)
+					line = chain.Rules[i].RenderAppend(chainName, prefixFrag, features)
 				}
 				buf.WriteLine(line)
 			}
@@ -741,6 +911,7 @@ func (t *RuleSet) applyUpdates() error {
 
 	// Now calculate ipfw updates for our inserted and appended rules, which are used to hook top-level chains.
 	var deleteRenderingErr error
+	var line string
 	t.dirtyAppend.Iter(func(chainName string) error {
 		previousHashes := t.chainToDataplaneHashes[chainName]
 		newRules := newChainToFullRules[chainName]
@@ -752,6 +923,18 @@ func (t *RuleSet) applyUpdates() error {
 		if reflect.DeepEqual(newChainHashes, previousHashes) {
 			// Chain is in sync, skip to next one.
 			return nil
+		}
+
+		// For simplicity, if we've discovered that we're out-of-sync, remove all our
+		// rules from this chain, then re-insert/re-append them below.
+		for i := 0; i < len(previousHashes); i++ {
+			if previousHashes[i] != "" {
+				line, deleteRenderingErr = t.renderDeleteByValueLine(chainName, i)
+				if deleteRenderingErr != nil {
+					return set.StopIteration
+				}
+				buf.WriteLine(line)
+			}
 		}
 
 		// Go over our slice of "new" rules and create a copy of the slice with just the rules we didn't empty out.
@@ -770,12 +953,7 @@ func (t *RuleSet) applyUpdates() error {
 			t.logCxt.Debug("Rendering append rules.")
 			for i := 0; i < len(rules); i++ {
 				prefixFrag := t.commentFrag(newInsertedRuleHashes[i])
-				chainPtr, ok := t.chainNameToChain[chainName]
-				if !ok || chainPtr == nil {
-					t.logCxt.WithField("chainName", chainName).Error("chainName not found or nil in chainNameToChain")
-					continue
-				}
-				line := rules[i].RenderAppend(*chainPtr, prefixFrag)
+				line := rules[i].RenderAppend(chainName, prefixFrag, features)
 				buf.WriteLine(line)
 				insertRuleLines[i] = line
 			}
@@ -790,12 +968,7 @@ func (t *RuleSet) applyUpdates() error {
 			t.logCxt.Debug("Rendering specific append rules.")
 			for i := 0; i < len(rules); i++ {
 				prefixFrag := t.commentFrag(newAppendedRuleHashes[i])
-				chainPtr, ok := t.chainNameToChain[chainName]
-				if !ok || chainPtr == nil {
-					t.logCxt.WithField("chainName", chainName).Error("chainName not found or nil in chainNameToChain")
-					continue
-				}
-				line := rules[i].RenderAppend(*chainPtr, prefixFrag)
+				line := rules[i].RenderAppend(chainName, prefixFrag, features)
 				buf.WriteLine(line)
 				appendRuleLines[i] = line
 			}
@@ -886,6 +1059,8 @@ const (
 
 var countIpfwRestore int = 0
 
+// TODO
+// execIptablesRestoreと見比べる
 func (r *RuleSet) execIpfwRestore(buf *RestoreInputBuilder) error {
 	if err := os.MkdirAll(RESTORE_DIR, 0755); err != nil {
 		return fmt.Errorf("MkdirAll failed: %v", err)
@@ -906,120 +1081,6 @@ func (r *RuleSet) execIpfwRestore(buf *RestoreInputBuilder) error {
 	return nil
 }
 
-// Chainへのルール追加
-// ・chainToAppendedRulesの更新
-func (t *RuleSet) InsertOrAppendRules(chainName string, rules []Rule) {
-	t.logCxt.WithField("chainName", chainName).Debug("Updating rule insertions")
-	// 古いルールの取得
-	oldRules := t.chainToInsertedRules[chainName]
-	// 新しいルールを保存
-	t.chainToInsertedRules[chainName] = rules
-	// ルール数の更新
-	numRulesDelta := len(rules) - len(oldRules)
-	t.gaugeNumRules.Add(float64(numRulesDelta))
-	// 次回Apply時に反映するためのマーキング
-	t.dirtyAppend.Add(chainName)
-
-	// 参照数などの管理
-	t.maybeIncrefReferredChains(chainName, rules)
-	t.maybeDecrefReferredChains(chainName, oldRules)
-
-	// 再チェックと更新を促すためのキャシュ無効化
-	t.InvalidateDataplaneCache("insertion")
-}
-
-// Chainへのルール追加（Append版）
-// 使うmapが違う
-func (t *RuleSet) AppendRules(chainName string, rules []Rule) {
-	t.logCxt.WithField("chainName", chainName).Debug("Updating rule appends")
-	oldRules := t.chainToAppendedRules[chainName]
-	t.chainToAppendedRules[chainName] = rules
-	numRulesDelta := len(rules) - len(oldRules)
-	t.gaugeNumRules.Add(float64(numRulesDelta))
-	t.dirtyAppend.Add(chainName)
-
-	t.maybeIncrefReferredChains(chainName, rules)
-	t.maybeDecrefReferredChains(chainName, oldRules)
-
-	t.InvalidateDataplaneCache("insertion")
-}
-
-func (t *RuleSet) UpdateChains(chains []*Chain) {
-	for _, chain := range chains {
-		t.UpdateChain(chain)
-	}
-}
-
-// Chainの登録
-// ・chainNameToChainの登録
-// ・dirtyChainsへの登録
-func (t *RuleSet) UpdateChain(chain *Chain) {
-	t.logCxt.WithField("chainName", chain.Name).Debug("Adding chain to available set.")
-	oldNumRules := 0
-
-	t.maybeIncrefReferredChains(chain.Name, chain.Rules)
-	if oldChain := t.chainNameToChain[chain.Name]; oldChain != nil {
-		oldNumRules = len(oldChain.Rules)
-		t.maybeDecrefReferredChains(chain.Name, oldChain.Rules)
-	}
-	// chainNameToChainの登録
-	t.chainNameToChain[chain.Name] = chain
-	// ChainNameToChainNumの登録
-	ChainNameToChainNum[chain.Name] = chain.GetStartRuleNum()
-	if chain.GetStartRuleNum() == 65535 {
-		t.logCxt.WithField("chainName", chain.Name).Panic("Failed GetStartRuleNum")
-	}
-	numRulesDelta := len(chain.Rules) - oldNumRules
-	t.gaugeNumRules.Add(float64(numRulesDelta))
-	if t.chainIsReferenced(chain.Name) {
-		// dirtyChainsへの登録
-		t.dirtyChains.Add(chain.Name)
-
-		t.InvalidateDataplaneCache("chain update")
-	}
-}
-
-func (t *RuleSet) RemoveChains(chains []*Chain) {
-	for _, chain := range chains {
-		t.RemoveChainByName(chain.Name)
-	}
-}
-
-func (t *RuleSet) RemoveChainByName(name string) {
-	t.logCxt.WithField("chainName", name).Debug("Removing chain from available set.")
-	if oldChain, known := t.chainNameToChain[name]; known {
-		t.gaugeNumRules.Sub(float64(len(oldChain.Rules)))
-		t.maybeDecrefReferredChains(name, oldChain.Rules)
-		delete(t.chainNameToChain, name)
-		if t.chainIsReferenced(name) {
-			t.dirtyChains.Add(name)
-
-			t.InvalidateDataplaneCache("chain removal")
-		}
-	}
-}
-
-func (t *RuleSet) maybeIncrefReferredChains(chainName string, rules []Rule) {
-	if !t.chainIsReferenced(chainName) {
-		return
-	}
-}
-
-func (t *RuleSet) decrefChain(chainName string) {
-	log.WithField("chainName", chainName).Debug("Decref chain")
-	if t.chainRefCounts[chainName] == 1 {
-		t.updateRateLimitedLog.WithField("chainName", chainName).Info("Chain no longer referenced, marking it for removal")
-		if chain := t.chainNameToChain[chainName]; chain != nil {
-			t.maybeDecrefReferredChains(chainName, chain.Rules)
-		}
-		delete(t.chainRefCounts, chainName)
-		t.dirtyChains.Add(chainName)
-		return
-	}
-
-	t.chainRefCounts[chainName] -= 1
-}
-
 func (t *RuleSet) desiredStateOfChain(chainName string) (chain *Chain, present bool) {
 	if !t.chainIsReferenced(chainName) {
 		return
@@ -1032,8 +1093,44 @@ func (t *RuleSet) commentFrag(hash string) string {
 	return fmt.Sprintf("// %s%s", t.hashCommentPrefix, hash)
 }
 
-func (r RuleSet) GetChainNum(name string) uint16 {
-	return r.chainNameToChain[name].GetStartRuleNum()
+// renderDeleteByIndexLine produces a delete line by rule number. This function is used for cali chains.
+func (t *RuleSet) renderDeleteByIndexLine(chainName string, ruleNum int) string {
+	chainNum := ChainNameToChainNum[chainName]
+	target := int(chainNum) + ruleNum -1
+	return fmt.Sprintf("ipfw delete %d", target)
+}
+
+// renderDeleteByValueLine produces a delete line by the full rule at the given rule number. This function is
+// used for non-Calico chains.
+func (t *RuleSet) renderDeleteByValueLine(chainName string, ruleNum int) (string, error) {
+	// For non-cali chains, get the rule by number but delete using the full rule instead of rule number.
+	rules, ok := t.chainToFullRules[chainName]
+	if !ok || ruleNum >= len(rules) {
+		return "", fmt.Errorf("Rendering delete for nonexistent rule: Rule %d in %q", ruleNum, chainName)
+	}
+
+	rule := rules[ruleNum]
+	target, ok := extractLeadingRuleNumber(rule)
+	if !ok {
+		return "", fmt.Errorf("Failed extractLeadingRuleNumber: Rule %d in %q", ruleNum, chainName)
+	}
+
+	return fmt.Sprintf("ipfw delete %d", target), nil
+}
+
+var leadingRuleNum = regexp.MustCompile(`^\s*(\d+)`)
+
+// 先頭の数字を int で返す（ゼロ埋めは失われる）
+func extractLeadingRuleNumber(line string) (int, bool) {
+	m := leadingRuleNum.FindStringSubmatch(line)
+	if m == nil {
+		return -1, false
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return -1, false
+	}
+	return n, true
 }
 
 func CalculateRuleHashes(chainName string, rules []Rule, features *environment.Features) []string {

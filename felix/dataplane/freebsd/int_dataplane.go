@@ -884,10 +884,24 @@ func (d *InternalDataplane) doStaticDataplaneConfig() {
 	log.Info("IPIP disabled. Not starting tunnel update thread.")
 }
 
+// TODO
+// allIpfwRuleSet消す
 func (d *InternalDataplane) setUpIpfwNormal() {
-	_ = setUpIptablesCompatible();
+	if err := setUpIptablesCompatible(); err != nil {
+		log.WithError(err).Panic("setUpIptablesCompatible failed")
+	}
 
-	for _, t := range d.allIpfwRuleSet {
+	for _, t := range d.ipfwRawRuleSet {
+		rawChains := d.ruleRenderer.StaticRawTableChains(t.IPVersion)
+		t.UpdateChains(rawChains)
+		t.InsertOrAppendRules("PREROUTING", []ipfw.Rule{{
+			Action: ipfw.CallAction{Target: rules.ChainRawPrerouting},
+		}})
+		t.InsertOrAppendRules("OUTPUT", []ipfw.Rule{{
+			Action: ipfw.CallAction{Target: rules.ChainRawOutput},
+		}})
+	}
+	for _, t := range d.ipfwFilterRuleSet {
 		filterChains := d.ruleRenderer.StaticFilterTableChains(t.IPVersion)
 		t.UpdateChains(filterChains)
 		t.InsertOrAppendRules("FORWARD", []ipfw.Rule{{
@@ -902,6 +916,43 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 
 		// Include rules which should be appended to the filter table forward chain.
 		t.AppendRules("FORWARD", d.ruleRenderer.StaticFilterForwardAppendRules())
+	}
+	for _, t := range d.ipfwNATRuleSet {
+		t.UpdateChains(d.ruleRenderer.StaticNATTableChains(t.IPVersion))
+		t.InsertOrAppendRules("PREROUTING", []ipfw.Rule{{
+			Action: ipfw.CallAction{Target: rules.ChainNATPrerouting},
+		}})
+		// We must go last to avoid a conflict if both kube-proxy and Calico
+		// decide to MASQ the traffic.
+		//
+		// This is because kube-proxy uses a mark bit to trigger its MASQ and
+		// we need the mark bit to get cleared by kube-proxy's chain.  If we
+		// go first, our MASQ rule terminates further processing, and the
+		// mark bit remains set on the packet.
+		//
+		// Leaving the mark set on the packet is a problem when the packet
+		// gets encapped because the mark is copied to the outer encap packet.
+		// The outer packet then gets MASQed by kube-proxy's rule.  In turn,
+		// that MASQ triggers a checksum offload bug in the kernel resulting
+		// in corrupted packets.
+		//
+		// N.B. ChainFIPSnat does not do MASQ, but does not collide with k8s
+		// service, namely nodeports.
+		t.AppendRules("POSTROUTING", []ipfw.Rule{{
+			Action: ipfw.CallAction{Target: rules.ChainNATPostrouting},
+		}})
+		t.InsertOrAppendRules("OUTPUT", []ipfw.Rule{{
+			Action: ipfw.CallAction{Target: rules.ChainNATOutput},
+		}})
+	}
+	for _, t := range d.ipfwMangleRuleSet {
+		t.UpdateChains(d.ruleRenderer.StaticMangleTableChains(t.IPVersion))
+		t.InsertOrAppendRules("PREROUTING", []ipfw.Rule{{
+			Action: ipfw.CallAction{Target: rules.ChainManglePrerouting},
+		}})
+		t.InsertOrAppendRules("POSTROUTING", []ipfw.Rule{{
+			Action: ipfw.CallAction{Target: rules.ChainManglePostrouting},
+		}})
 	}
 }
 

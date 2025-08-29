@@ -74,6 +74,9 @@ func (b *RestoreInputBuilder) EndTransaction() {
 	if b.currentTableName == "" {
 		log.Panic("EndTransaction() called without active transaction.")
 	}
+	if b.txnOpenerWritten {
+		b.writeFormattedLine("# COMMIT")
+	}
 	b.currentTableName = ""
 }
 
@@ -96,6 +99,7 @@ func (b *RestoreInputBuilder) maybeWriteTransactionOpener() {
 		log.Panic("maybeWriteTransactionOpener() called without active transaction.")
 	}
 	if !b.txnOpenerWritten {
+		b.writeFormattedLine("# Table Name: %s", b.currentTableName)
 		b.txnOpenerWritten = true
 	}
 }
@@ -105,8 +109,7 @@ func (b *RestoreInputBuilder) maybeWriteTransactionOpener() {
 // transaction.
 func (b *RestoreInputBuilder) WriteForwardReference(chainName string) {
 	b.maybeWriteTransactionOpener()
-	// TODO
-	//b.writeFormattedLine(":%s - -", chainName)
+	b.writeFormattedLine("# Chain Name: %s", chainName)
 }
 
 // WriteLine writes a line of iptables instructions to the buffer.  Intended for writing the actual rules.

@@ -16,6 +16,10 @@ func AddLog(a Action) string {
 	return a.String() + " log"
 }
 
+type Referrer interface {
+	ReferencedChain() string
+}
+
 type AllowAction struct {
 	TypeAllow struct{}
 }
@@ -66,6 +70,15 @@ func (a CallAction) String() string {
 	return "// failed callAction: no filed RuleNumber or Target"
 }
 
+func (a CallAction) ReferencedChain() string {
+	if a.Target != "" {
+		return a.Target
+	}
+	return fmt.Sprintf("%d", a.RuleNumber)
+}
+
+var _ Referrer = CallAction{}
+
 type ReturnAction struct {
 	TypeReturn struct{}
 }
@@ -81,8 +94,33 @@ type SkiptoAction struct {
 }
 
 func (a SkiptoAction) String() string {
-	return fmt.Sprintf("skipto %d", a.RuleNumber)
+	if a.RuleNumber != 0 {
+		return fmt.Sprintf("skipto %d", a.RuleNumber)
+	}
+	if a.Target != "" {
+		if ChainNameToChainNum[a.Target] != 0 {
+			return fmt.Sprintf("skipto %d", ChainNameToChainNum[a.Target])
+		} else {
+			n, err := SetNewNumber()
+			if err != nil {
+				log.WithError(err).Panic("CallAction: setNewNumber failed")
+				return ""
+			}
+			ChainNameToChainNum[a.Target] = n
+			return fmt.Sprintf("skipto %d", n)
+		}
+	}
+	return "// failed skiptoAction: no filed RuleNumber or Target"
 }
+
+func (a SkiptoAction) ReferencedChain() string {
+	if a.Target != "" {
+		return a.Target
+	}
+	return fmt.Sprintf("%d", a.RuleNumber)
+}
+
+var _ Referrer = SkiptoAction{}
 
 type NatAction struct {
 	TypeNat struct{}
