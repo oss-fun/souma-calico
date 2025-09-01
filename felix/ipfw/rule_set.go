@@ -3,8 +3,6 @@
 package ipfw
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"fmt"
 	"regexp"
 	"sync"
@@ -527,6 +525,8 @@ func (t *RuleSet) loadDataplaneState() {
 				chainName,
 				numEmptyStrings(dpHashes),
 			)
+			fmt.Printf("[souma-log] dpHashes: %v\n", dpHashes)
+			fmt.Printf("[souma-log] expectedHashes: %v\n", expectedHashes)
 			if !reflect.DeepEqual(dpHashes, expectedHashes) {
 				logCxt.WithFields(log.Fields{
 					"expectedRuleIDs": expectedHashes,
@@ -536,6 +536,8 @@ func (t *RuleSet) loadDataplaneState() {
 			}
 		} else {
 			// One of our chains, should match exactly.
+			fmt.Printf("[souma-log] dpHashes: %v\n", dpHashes)
+			fmt.Printf("[souma-log] expectedHashes: %v\n", expectedHashes)
 			if !reflect.DeepEqual(dpHashes, expectedHashes) {
 				logCxt.Warn("Detected out-of-sync Calico chain, marking for resync")
 				t.dirtyChains.Add(chainName)
@@ -707,7 +709,8 @@ func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]s
 	if err != nil {
 		return nil, nil, err
 	}
-
+	
+	fmt.Printf("[souma-log] data:\n%s\n", data)
 	lines := strings.Split(string(data), "\n")
 
 	for _, line := range lines {
@@ -715,7 +718,7 @@ func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]s
 			continue
 		}
 
-		// ipfw 出力例: "00100 allow ip from any to any // cali:forward:spH8qYYv24LlK31x"
+		// ipfw 出力例: "00100 allow ip from any to any // cali:OUTPUT:spH8qYYv24LlK31x"
 		if !strings.Contains(line, "// cali:") {
 			continue
 		}
@@ -727,18 +730,16 @@ func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]s
 		ruleText := strings.TrimSpace(parts[0])
 		meta := strings.TrimSpace(parts[1])
 
-		// "forward:spH8qYYv24LlK31x" → chainName="forward", ruleID="spH8qYYv24LlK31x"
+		// "OUTPUT:spH8qYYv24LlK31x"
 		metaParts := strings.SplitN(meta, ":", 2)
-		chainName := "cali-unknown"
-		if len(metaParts) >= 1 {
-			chainName = "cali-" + metaParts[0]
+		if len(metaParts) != 2 {
+			continue
 		}
+		chainName := metaParts[0]
 
 		// 保存
 		rules[chainName] = append(rules[chainName], ruleText)
-
-		h := sha1.Sum([]byte(ruleText))
-		hashes[chainName] = append(hashes[chainName], hex.EncodeToString(h[:8]))
+		hashes[chainName] = append(hashes[chainName], meta)
 	}
 
 	return hashes, rules, nil
@@ -888,8 +889,8 @@ func (t *RuleSet) applyUpdates() error {
 					prefixFrag := t.commentFrag(currentHashes[i])
 					line = chain.Rules[i].RenderReplace(chainName, uint16(ruleNum), prefixFrag, features)
 				} else if i < len(previousHashes) {
-					// renderDeleteByIndexLine not supported
-					t.logCxt.Debug("renderDeleteByIndexLine not supported")
+					ruleNum := len(currentHashes) + 1 // 1-indexed
+					line = t.renderDeleteByIndexLine(chainName, ruleNum)
 				} else {
 					// currentHashes was longer.  Append.
 					prefixFrag := t.commentFrag(currentHashes[i])

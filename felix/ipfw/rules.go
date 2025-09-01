@@ -39,8 +39,8 @@ func (r Rule) RenderRaw(prefixFragment string) string {
 
 func (r Rule) RenderAppend(chainName, prefixFragment string, features *environment.Features) string {
 	fragments := []string{}
-	ruleNum := strconv.Itoa(int(ChainNameToChainNum[chainName]))
-	fragments = append(fragments, append(cmdshim.ADD_COMMAND, ruleNum)...)
+	fmt.Printf("[souma-log] ChainName: %s, RuleNum: %d, Rule: %s\n", chainName, r.Number, r.renderInner(fragments, prefixFragment, features))
+	fragments = append(fragments, append(cmdshim.ADD_COMMAND, strconv.Itoa(int(r.Number)))...)
 	return r.renderInner(fragments, prefixFragment, features)
 }
 
@@ -85,7 +85,7 @@ func (r Rule) renderInner(fragments []string, prefixFragment string, features *e
 	return strings.Join(fragments, " ")
 }
 
-var shellUnsafe = regexp.MustCompile(`[^\w @%+=:,./-#]`)
+var shellUnsafe = regexp.MustCompile(`[^\w @%+=:,./#-]`)
 
 func escapeComment(s string) string {
 	return shellUnsafe.ReplaceAllString(s, "_")
@@ -149,6 +149,7 @@ func (c *Chain) RuleHashes(features *environment.Features) []string {
 		// Encode the hash using a compact character set.  We use the URL-safe base64
 		// variant because it uses '-' and '_', which are more shell-friendly.
 		hashes[ii] = fmt.Sprintf("%s:%s", c.Name, base64.RawURLEncoding.EncodeToString(hash)[:HashLength])
+		//hashes[ii] = base64.RawURLEncoding.EncodeToString(hash)[:HashLength]
 		if log.GetLevel() >= log.DebugLevel {
 			log.WithFields(log.Fields{
 				"ruleFragment": ruleForHashing,
@@ -166,9 +167,9 @@ func (c *Chain) GetStartRuleNum() uint16 {
 	switch {
 	case c.Number != 0:
 		return c.Number
-	case len(c.Rules) != 0:
-		c.Number = c.Rules[0].Number
-		return c.Number
+	//case len(c.Rules) != 0:
+	//	c.Number = c.Rules[0].Number
+	//	return c.Number
 	case ChainNameToChainNum[c.Name] != 0:
 		c.Number = ChainNameToChainNum[c.Name]
 		return c.Number
@@ -195,14 +196,13 @@ func (c *Chain) Organize() error {
 	}
 	ChainNameToChainNum[c.Name] = start
 	c.Number = start
-	fmt.Printf("[souma-log] name: %s\n", c.Name)
-	fmt.Printf("[souma-log] number: %d\n", c.Number)
+	fmt.Printf("[souma-log] chain(%s) SetNewNumber setted: %d\n", c.Name, c.Number)
 
 	// rule番号の生成
-	for i, r := range c.Rules {
-		r.Number = c.Number + uint16(i)
+	for i, _ := range c.Rules {
+		c.Rules[i].Number = c.Number + uint16(i)
+		fmt.Printf("[souma-log] Organize c.Number: %d, r.Number: %d\n", c.Number, c.Rules[i].Number)
 	}
-	fmt.Printf("[souma-log] rules: %v\n", c.Rules)
 
 	return nil
 }
