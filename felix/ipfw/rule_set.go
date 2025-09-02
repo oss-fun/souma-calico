@@ -14,6 +14,7 @@ import (
 	"time"
 	"io"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 
@@ -72,10 +73,10 @@ var (
 	}, []string{"ip_version", "ruleset"})
 )
 
-var ChainNameToChainNum map[string]uint16
+var ChainNameToChain map[string]*Chain
 
 func init() {
-	ChainNameToChainNum = make(map[string]uint16)
+	ChainNameToChain = make(map[string]*Chain)
 
 	prometheus.MustRegister(countNumRestoreCalls)
 	prometheus.MustRegister(countNumRestoreErrors)
@@ -377,10 +378,15 @@ func (t *RuleSet) UpdateChain(chain *Chain) {
 		oldNumRules = len(oldChain.Rules)
 		t.maybeDecrefReferredChains(chain.Name, oldChain.Rules)
 	}
+
+	// TODO
+	//if err := chain.Organize(); err != nil {	
+	//}
+
 	// chainNameToChainの登録
 	t.chainNameToChain[chain.Name] = chain
-	// ChainNameToChainNumの登録
-	ChainNameToChainNum[chain.Name] = chain.GetStartRuleNum()
+	// ChainNameToChainの登録
+	ChainNameToChain[chain.Name] = chain
 	if chain.GetStartRuleNum() == 65535 {
 		t.logCxt.WithField("chainName", chain.Name).Panic("Failed GetStartRuleNum")
 	}
@@ -495,7 +501,10 @@ func (t *RuleSet) loadDataplaneState() {
 			logCxt.Debug("Skipping known-dirty chain")
 			continue
 		}
-		dpHashes := dataplaneHashes[chainName]
+		dpHashes, ok := dataplaneHashes[chainName]
+		if !ok {
+			dpHashes = []string{}
+		}
 		if !t.ourChainsRegexp.MatchString(chainName) {
 			// Not one of our chains so it may be one that we're inserting rules into.
 			insertedRules := t.chainToInsertedRules[chainName]
@@ -525,8 +534,11 @@ func (t *RuleSet) loadDataplaneState() {
 				chainName,
 				numEmptyStrings(dpHashes),
 			)
-			fmt.Printf("[souma-log] dpHashes: %v\n", dpHashes)
-			fmt.Printf("[souma-log] expectedHashes: %v\n", expectedHashes)
+			//fmt.Printf("[souma-log] dpHashes: %v\n", dpHashes)
+			//fmt.Printf("[souma-log] expectedHashes: %v\n", expectedHashes)
+			if diff := cmp.Diff(expectedHashes, dpHashes); diff != "" {
+				fmt.Printf("[souma-log] mismatch (-expected +got):\n%s", diff)
+			}
 			if !reflect.DeepEqual(dpHashes, expectedHashes) {
 				logCxt.WithFields(log.Fields{
 					"expectedRuleIDs": expectedHashes,
@@ -536,8 +548,11 @@ func (t *RuleSet) loadDataplaneState() {
 			}
 		} else {
 			// One of our chains, should match exactly.
-			fmt.Printf("[souma-log] dpHashes: %v\n", dpHashes)
-			fmt.Printf("[souma-log] expectedHashes: %v\n", expectedHashes)
+			//fmt.Printf("[souma-log] dpHashes: %v\n", dpHashes)
+			//fmt.Printf("[souma-log] expectedHashes: %v\n", expectedHashes)
+			if diff := cmp.Diff(expectedHashes, dpHashes); diff != "" {
+				fmt.Printf("[souma-log] mismatch (-expected +got):\n%s", diff)
+			}
 			if !reflect.DeepEqual(dpHashes, expectedHashes) {
 				logCxt.Warn("Detected out-of-sync Calico chain, marking for resync")
 				t.dirtyChains.Add(chainName)
@@ -590,6 +605,8 @@ func (t *RuleSet) expectedHashesForInsertAppendChain(
 ) (allHashes, ourInsertedHashes, ourAppendedHashes []string) {
 	insertedRules := t.chainToInsertedRules[chainName]
 	appendedRules := t.chainToAppendedRules[chainName]
+	fmt.Printf("[souma-log] insertedRules: %v\n", insertedRules)
+	fmt.Printf("[souma-log] appendedRules: %v\n", appendedRules)
 	allHashes = make([]string, len(insertedRules)+len(appendedRules)+numNonCalicoRules)
 	features := t.featureDetector.GetFeatures()
 	if len(insertedRules) > 0 {
@@ -1096,7 +1113,11 @@ func (t *RuleSet) commentFrag(hash string) string {
 
 // renderDeleteByIndexLine produces a delete line by rule number. This function is used for cali chains.
 func (t *RuleSet) renderDeleteByIndexLine(chainName string, ruleNum int) string {
-	chainNum := ChainNameToChainNum[chainName]
+	chain, ok := ChainNameToChain[chainName]
+	if !ok {
+		t.logCxt.Panic("ChainNameToChain Failed")
+	}
+	chainNum := chain.GetStartRuleNum()
 	target := int(chainNum) + ruleNum -1
 	return fmt.Sprintf("ipfw delete %d", target)
 }

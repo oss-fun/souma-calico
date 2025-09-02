@@ -46,7 +46,11 @@ func (r Rule) RenderAppend(chainName, prefixFragment string, features *environme
 
 func (r Rule) RenderReplace(chainName string, ruleNum uint16, prefixFragment string, features *environment.Features) string {
 	// ルール番号の特定
-	chainNum := ChainNameToChainNum[chainName]
+	chain, ok := ChainNameToChain[chainName]
+	if !ok {
+		log.Panic("ChainNameToChain Failed")
+	}
+	chainNum := chain.GetStartRuleNum()
 	target := chainNum + ruleNum - 1
 
 	// 既存のルールを削除するコマンド生成
@@ -170,9 +174,9 @@ func (c *Chain) GetStartRuleNum() uint16 {
 	//case len(c.Rules) != 0:
 	//	c.Number = c.Rules[0].Number
 	//	return c.Number
-	case ChainNameToChainNum[c.Name] != 0:
-		c.Number = ChainNameToChainNum[c.Name]
-		return c.Number
+	//case ChainNameToChain[c.Name] != 0:
+	//	c.Number = ChainNameToChainNum[c.Name]
+	//	return c.Number
 	default:
 		// log.Panic("GetStartRuleNum failed: no number found for chain ", c.Name)
 		return 65535
@@ -194,7 +198,6 @@ func (c *Chain) Organize() error {
 			return fmt.Errorf("SetNewNumber failed: %v", err)
 		}
 	}
-	ChainNameToChainNum[c.Name] = start
 	c.Number = start
 	fmt.Printf("[souma-log] chain(%s) SetNewNumber setted: %d\n", c.Name, c.Number)
 
@@ -202,6 +205,11 @@ func (c *Chain) Organize() error {
 	for i, _ := range c.Rules {
 		c.Rules[i].Number = c.Number + uint16(i)
 		fmt.Printf("[souma-log] Organize c.Number: %d, r.Number: %d\n", c.Number, c.Rules[i].Number)
+	}
+
+	_, ok := ChainNameToChain[c.Name]
+	if !ok {
+		ChainNameToChain[c.Name] = c
 	}
 
 	return nil
@@ -214,7 +222,8 @@ const (
 // chain番号の生成
 func SetNewNumber() (uint16, error) {
 	var result uint16
-	for _, n := range ChainNameToChainNum {
+	for _, c := range ChainNameToChain {
+		n := c.Number
 		if result < n {
 			result = n
 		}
@@ -287,3 +296,17 @@ func BytesToRestoreFile(rules []byte, path string) error {
 	return nil
 }
 
+// 独自実装
+func SetChainNum(chainName string, num uint16) {
+	chain, ok := ChainNameToChain[chainName]
+	if ok {
+		chain.Number = num
+	} else {
+		newChain := &Chain {
+			Name: chainName,
+			Number: num,
+			Rules: []Rule{},
+		}
+		ChainNameToChain[chainName] = newChain
+	}
+}

@@ -55,15 +55,15 @@ func (a CallAction) String() string {
 		return fmt.Sprintf("call %d", a.RuleNumber)
 	}
 	if a.Target != "" {
-		if ChainNameToChainNum[a.Target] != 0 {
-			return fmt.Sprintf("call %d", ChainNameToChainNum[a.Target])
+		if ChainNameToChain[a.Target].Number != 0 {
+			return fmt.Sprintf("call %d", ChainNameToChain[a.Target].Number)
 		} else {
 			n, err := SetNewNumber()
 			if err != nil {
 				log.WithError(err).Panic("CallAction: setNewNumber failed")
 				return ""
 			}
-			ChainNameToChainNum[a.Target] = n
+			SetChainNum(a.Target, n)
 			return fmt.Sprintf("call %d", n)
 		}
 	}
@@ -98,15 +98,15 @@ func (a SkiptoAction) String() string {
 		return fmt.Sprintf("skipto %d", a.RuleNumber)
 	}
 	if a.Target != "" {
-		if ChainNameToChainNum[a.Target] != 0 {
-			return fmt.Sprintf("skipto %d", ChainNameToChainNum[a.Target])
+		if ChainNameToChain[a.Target].Number != 0 {
+			return fmt.Sprintf("skipto %d", ChainNameToChain[a.Target].Number)
 		} else {
 			n, err := SetNewNumber()
 			if err != nil {
 				log.WithError(err).Panic("CallAction: setNewNumber failed")
 				return ""
 			}
-			ChainNameToChainNum[a.Target] = n
+			SetChainNum(a.Target, n)
 			return fmt.Sprintf("skipto %d", n)
 		}
 	}
