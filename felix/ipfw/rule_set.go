@@ -3,6 +3,7 @@
 package ipfw
 
 import (
+	"bufio"
 	"fmt"
 	"regexp"
 	"sync"
@@ -31,6 +32,9 @@ const (
 )
 
 var (
+	chainCreateRegexp = regexp.MustCompile(`// chainName: (.*)`)
+	appendRegexp = regexp.MustCompile(`(.*) // cali:(.*):(.*)`)
+
 	// List of all the top-level kernel-created chains by iptables table.
 	tableToKernelChains = map[string][]string{
 		"filter": {"INPUT", "FORWARD", "OUTPUT"},
@@ -38,10 +42,6 @@ var (
 		"mangle": {"PREROUTING", "INPUT", "FORWARD", "OUTPUT", "POSTROUTING"},
 		"raw":    {"PREROUTING", "OUTPUT"},
 	}
-
-	// TODO
-	// chainCreateRegexp = regexp.MustCompile(`^// (\S+)`)
-	// appendRegexp = regexp.MustCompile(`add (\S+)`)
 
 	countNumRestoreCalls = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "felix_ipfw_restore_calls",
@@ -96,7 +96,7 @@ type RuleSet struct {
 	chainToInsertedRules map[string][]Rule
 	chainToAppendedRules map[string][]Rule
 	chainNameToChain     map[string]*Chain
-	dirtyAppend          set.Set[string]
+	dirtyInsertAppend    set.Set[string]
 
 	chainRefCounts map[string]int
 	dirtyChains    set.Set[string]
@@ -195,12 +195,12 @@ func NewRuleSet(
 
 	inserts := map[string][]Rule{}
 	appends := map[string][]Rule{}
-	dirtyAppend := set.New[string]()
+	dirtyInsertAppend := set.New[string]()
 	refcounts := map[string]int{}
 	for _, kernelChain := range tableToKernelChains[name] {
 		inserts[kernelChain] = []Rule{}
 		appends[kernelChain] = []Rule{}
-		dirtyAppend.Add(kernelChain)
+		dirtyInsertAppend.Add(kernelChain)
 		// Kernel chains are referred to by definition.
 		refcounts[kernelChain] += 1
 	}
@@ -250,7 +250,7 @@ func NewRuleSet(
 		featureDetector:        featureDetector,
 		chainToInsertedRules:   inserts,
 		chainToAppendedRules:   appends,
-		dirtyAppend:            dirtyAppend,
+		dirtyInsertAppend:      dirtyInsertAppend,
 		chainNameToChain:       map[string]*Chain{},
 		chainRefCounts:         refcounts,
 		dirtyChains:            set.New[string](),
@@ -334,7 +334,7 @@ func (t *RuleSet) InsertOrAppendRules(chainName string, rules []Rule) {
 	numRulesDelta := len(rules) - len(oldRules)
 	t.gaugeNumRules.Add(float64(numRulesDelta))
 	// 次回Apply時に反映するためのマーキング
-	t.dirtyAppend.Add(chainName)
+	t.dirtyInsertAppend.Add(chainName)
 
 	// 参照数などの管理
 	t.maybeIncrefReferredChains(chainName, rules)
@@ -352,7 +352,7 @@ func (t *RuleSet) AppendRules(chainName string, rules []Rule) {
 	t.chainToAppendedRules[chainName] = rules
 	numRulesDelta := len(rules) - len(oldRules)
 	t.gaugeNumRules.Add(float64(numRulesDelta))
-	t.dirtyAppend.Add(chainName)
+	t.dirtyInsertAppend.Add(chainName)
 
 	t.maybeIncrefReferredChains(chainName, rules)
 	t.maybeDecrefReferredChains(chainName, oldRules)
@@ -495,16 +495,17 @@ func (t *RuleSet) loadDataplaneState() {
 	// chains for refresh.
 	for chainName, expectedHashes := range t.chainToDataplaneHashes {
 		logCxt := t.logCxt.WithField("chainName", chainName)
-		if t.dirtyChains.Contains(chainName) || t.dirtyAppend.Contains(chainName) {
+		if t.dirtyChains.Contains(chainName) || t.dirtyInsertAppend.Contains(chainName) {
 			// Already an update pending for this chain; no point in flagging it as
 			// out-of-sync.
 			logCxt.Debug("Skipping known-dirty chain")
 			continue
 		}
-		dpHashes, ok := dataplaneHashes[chainName]
-		if !ok {
-			dpHashes = []string{}
-		}
+		dpHashes := dataplaneHashes[chainName]
+		//dpHashes, ok := dataplaneHashes[chainName]
+		//if !ok {
+		//	dpHashes = []string{}
+		//}
 		if !t.ourChainsRegexp.MatchString(chainName) {
 			// Not one of our chains so it may be one that we're inserting rules into.
 			insertedRules := t.chainToInsertedRules[chainName]
@@ -522,7 +523,7 @@ func (t *RuleSet) loadDataplaneState() {
 				if dataplaneHasInserts {
 					logCxt.WithField("actualRuleIDs", dpHashes).Warn(
 						"Chain had unexpected inserts, marking for resync")
-					t.dirtyAppend.Add(chainName)
+					t.dirtyInsertAppend.Add(chainName)
 				}
 				continue
 			}
@@ -544,7 +545,7 @@ func (t *RuleSet) loadDataplaneState() {
 					"expectedRuleIDs": expectedHashes,
 					"actualRuleIDs":   dpHashes,
 				}).Warn("Detected out-of-sync inserts, marking for resync")
-				t.dirtyAppend.Add(chainName)
+				t.dirtyInsertAppend.Add(chainName)
 			}
 		} else {
 			// One of our chains, should match exactly.
@@ -564,7 +565,7 @@ func (t *RuleSet) loadDataplaneState() {
 	t.logCxt.Debug("Scanning for unexpected ipfw chains")
 	for chainName, dataplaneHashes := range dataplaneHashes {
 		logCxt := t.logCxt.WithField("chainName", chainName)
-		if t.dirtyChains.Contains(chainName) || t.dirtyAppend.Contains(chainName) {
+		if t.dirtyChains.Contains(chainName) || t.dirtyInsertAppend.Contains(chainName) {
 			// Already an update pending for this chain.
 			logCxt.Debug("Skipping known-dirty chain")
 			continue
@@ -582,7 +583,7 @@ func (t *RuleSet) loadDataplaneState() {
 			for _, hash := range dataplaneHashes {
 				if hash != "" {
 					logCxt.Info("Found unexpected insert, marking for cleanup")
-					t.dirtyAppend.Add(chainName)
+					t.dirtyInsertAppend.Add(chainName)
 					break
 				}
 			}
@@ -607,16 +608,18 @@ func (t *RuleSet) expectedHashesForInsertAppendChain(
 	appendedRules := t.chainToAppendedRules[chainName]
 	fmt.Printf("[souma-log] insertedRules: %v\n", insertedRules)
 	fmt.Printf("[souma-log] appendedRules: %v\n", appendedRules)
-	allHashes = make([]string, len(insertedRules)+len(appendedRules)+numNonCalicoRules)
 	features := t.featureDetector.GetFeatures()
 	if len(insertedRules) > 0 {
 		ourInsertedHashes = CalculateRuleHashes(chainName, insertedRules, features)
 	}
+	fmt.Printf("[souma-log] ourInsertedHashes: %v\n", ourInsertedHashes)
 	if len(appendedRules) > 0 {
 		// Add *append* to chainName to produce a unique hash in case append chain/rules are same
 		// as insert chain/rules above.
 		ourAppendedHashes = CalculateRuleHashes(chainName+"*appends*", appendedRules, features)
 	}
+	fmt.Printf("[souma-log] ourAppededHashes: %v\n", ourAppendedHashes)
+	allHashes = make([]string, len(ourInsertedHashes)+len(ourAppendedHashes)+numNonCalicoRules)
 	offset := 0
 	if t.insertMode == "append" {
 		log.Debug("In append mode, returning our hashes at end.")
@@ -718,47 +721,70 @@ func (t *RuleSet) attemptToGetHashesAndRulesFromDataplane() (hashes map[string][
 
 // TODO
 // 独自実装
+// ipfw 出力例:
+// "00100 count // ChainName"
+// "00101 allow ip from any to any // cali:OUTPUT:spH8qYYv24LlK31x"
 func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]string, rules map[string][]string, err error) {
 	hashes = make(map[string][]string)
 	rules = make(map[string][]string)
+	scanner := bufio.NewScanner(r)
 
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return nil, nil, err
+	chainHasCalicoRule := set.New[string]()
+
+	//debug := log.GetLevel() >= log.DebugLevel
+
+	for scanner.Scan(){
+		// 1行ずつ取得
+		line := scanner.Bytes()
+		logCxt := t.logCxt
+		//if debug {
+		//	logCxt = logCxt.WithField("line", string(line))
+		//	logCxt.Debug("Parsing line")
+		//}
+
+		// chain名を取得
+		// chainCreateRegexp = "// chainName: (.*)"
+		captures := chainCreateRegexp.FindSubmatch(line)
+		if captures != nil {
+			chainName := string(captures[1])
+			//if debug {
+			//	logCxt.WithField("chainName", chainName).Debug("Found forward-reference")
+			//}
+			hashes[chainName] = []string{}
+			continue
+		}
+
+		// ルールを取得
+		// appendRegexp = "(.*) // cali:(.*):(.*)"
+		captures = appendRegexp.FindSubmatch(line)
+		if captures == nil {
+			logCxt.Debug("Not an append, skipping")
+			continue
+		}
+		chainName := string(captures[2])
+
+		hash := ""
+		if captures != nil {
+			hash = string(fmt.Sprintf("%s:%s", captures[2], captures[3]))
+			//if debug {
+			//	logCxt.WithField("hash", hash).Debug("Found hash in rule")
+			//}
+			chainHasCalicoRule.Add(chainName)
+		}
+		hashes[chainName] = append(hashes[chainName], hash)
 	}
-	
-	fmt.Printf("[souma-log] data:\n%s\n", data)
-	lines := strings.Split(string(data), "\n")
-
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-
-		// ipfw 出力例: "00100 allow ip from any to any // cali:OUTPUT:spH8qYYv24LlK31x"
-		if !strings.Contains(line, "// cali:") {
-			continue
-		}
-
-		parts := strings.SplitN(line, "// cali:", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		ruleText := strings.TrimSpace(parts[0])
-		meta := strings.TrimSpace(parts[1])
-
-		// "OUTPUT:spH8qYYv24LlK31x"
-		metaParts := strings.SplitN(meta, ":", 2)
-		if len(metaParts) != 2 {
-			continue
-		}
-		chainName := metaParts[0]
-
-		// 保存
-		rules[chainName] = append(rules[chainName], ruleText)
-		hashes[chainName] = append(hashes[chainName], meta)
+	if scanner.Err() != nil {
+		log.WithError(scanner.Err()).Error("Failed to read hashes from dataplane")
+		return nil, nil, scanner.Err()
 	}
 
+	//for chainName := range rules {
+	//	if !chainHasCalicoRule.Contains(chainName) {
+	//		delete(rules, chainName)
+	//	}
+	//}
+	t.logCxt.Debugf("Read hashes from dataplane: %#v", hashes)
+	t.logCxt.Debugf("Read rules from dataplane: %#v", rules)
 	return hashes, rules, nil
 }
 
@@ -930,7 +956,7 @@ func (t *RuleSet) applyUpdates() error {
 	// Now calculate ipfw updates for our inserted and appended rules, which are used to hook top-level chains.
 	var deleteRenderingErr error
 	var line string
-	t.dirtyAppend.Iter(func(chainName string) error {
+	t.dirtyInsertAppend.Iter(func(chainName string) error {
 		previousHashes := t.chainToDataplaneHashes[chainName]
 		newRules := newChainToFullRules[chainName]
 
@@ -949,6 +975,7 @@ func (t *RuleSet) applyUpdates() error {
 			if previousHashes[i] != "" {
 				line, deleteRenderingErr = t.renderDeleteByValueLine(chainName, i)
 				if deleteRenderingErr != nil {
+					//fmt.Printf("\nここ！\n")
 					return set.StopIteration
 				}
 				buf.WriteLine(line)
@@ -1055,7 +1082,7 @@ func (t *RuleSet) applyUpdates() error {
 	// found there was nothing to do above, since we may have found out that a dirty chain
 	// was actually a no-op update.
 	t.dirtyChains = set.New[string]()
-	t.dirtyAppend = set.New[string]()
+	t.dirtyInsertAppend = set.New[string]()
 
 	// Store off the updates.
 	for chainName, hashes := range newHashes {
@@ -1125,6 +1152,7 @@ func (t *RuleSet) renderDeleteByIndexLine(chainName string, ruleNum int) string 
 // renderDeleteByValueLine produces a delete line by the full rule at the given rule number. This function is
 // used for non-Calico chains.
 func (t *RuleSet) renderDeleteByValueLine(chainName string, ruleNum int) (string, error) {
+	/*
 	// For non-cali chains, get the rule by number but delete using the full rule instead of rule number.
 	rules, ok := t.chainToFullRules[chainName]
 	if !ok || ruleNum >= len(rules) {
@@ -1137,6 +1165,15 @@ func (t *RuleSet) renderDeleteByValueLine(chainName string, ruleNum int) (string
 		return "", fmt.Errorf("Failed extractLeadingRuleNumber: Rule %d in %q", ruleNum, chainName)
 	}
 
+	return fmt.Sprintf("ipfw delete %d", target), nil
+	*/
+	chain, ok := ChainNameToChain[chainName]
+	if !ok {
+		//t.logCxt.Panic("ChainNameToChain Failed")
+		return "", fmt.Errorf("ChainNameToChain failed: %s", chainName)
+	}
+	chainNum := chain.GetStartRuleNum()
+	target := int(chainNum) + ruleNum -1
 	return fmt.Sprintf("ipfw delete %d", target), nil
 }
 
@@ -1156,11 +1193,14 @@ func extractLeadingRuleNumber(line string) (int, bool) {
 }
 
 func CalculateRuleHashes(chainName string, rules []Rule, features *environment.Features) []string {
-	chain := Chain{
+	chain := &Chain{
 		Name: chainName,
 		Rules: rules,
 	}
-	return (&chain).RuleHashes(features)
+	if err := chain.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed StaticFilterInputForwardCheckChain result Organize")
+	}
+	return chain.RuleHashes(features)
 }
 
 func numEmptyStrings(strs []string) int {
