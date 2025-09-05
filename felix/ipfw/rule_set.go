@@ -32,8 +32,8 @@ const (
 )
 
 var (
-	chainCreateRegexp = regexp.MustCompile(`// chainName: (.*)`)
-	appendRegexp = regexp.MustCompile(`(.*) // cali:(.*):(.*)`)
+	//chainCreateRegexp = regexp.MustCompile(`// chainName: (.*?) //`)
+	appendRegexp = regexp.MustCompile(`// cali:([^:]+):(.+)`)
 
 	// List of all the top-level kernel-created chains by iptables table.
 	tableToKernelChains = map[string][]string{
@@ -535,8 +535,6 @@ func (t *RuleSet) loadDataplaneState() {
 				chainName,
 				numEmptyStrings(dpHashes),
 			)
-			//fmt.Printf("[souma-log] dpHashes: %v\n", dpHashes)
-			//fmt.Printf("[souma-log] expectedHashes: %v\n", expectedHashes)
 			if diff := cmp.Diff(expectedHashes, dpHashes); diff != "" {
 				fmt.Printf("[souma-log] mismatch (-expected +got):\n%s", diff)
 			}
@@ -549,8 +547,6 @@ func (t *RuleSet) loadDataplaneState() {
 			}
 		} else {
 			// One of our chains, should match exactly.
-			//fmt.Printf("[souma-log] dpHashes: %v\n", dpHashes)
-			//fmt.Printf("[souma-log] expectedHashes: %v\n", expectedHashes)
 			if diff := cmp.Diff(expectedHashes, dpHashes); diff != "" {
 				fmt.Printf("[souma-log] mismatch (-expected +got):\n%s", diff)
 			}
@@ -606,19 +602,15 @@ func (t *RuleSet) expectedHashesForInsertAppendChain(
 ) (allHashes, ourInsertedHashes, ourAppendedHashes []string) {
 	insertedRules := t.chainToInsertedRules[chainName]
 	appendedRules := t.chainToAppendedRules[chainName]
-	fmt.Printf("[souma-log] insertedRules: %v\n", insertedRules)
-	fmt.Printf("[souma-log] appendedRules: %v\n", appendedRules)
 	features := t.featureDetector.GetFeatures()
 	if len(insertedRules) > 0 {
 		ourInsertedHashes = CalculateRuleHashes(chainName, insertedRules, features)
 	}
-	fmt.Printf("[souma-log] ourInsertedHashes: %v\n", ourInsertedHashes)
 	if len(appendedRules) > 0 {
 		// Add *append* to chainName to produce a unique hash in case append chain/rules are same
 		// as insert chain/rules above.
 		ourAppendedHashes = CalculateRuleHashes(chainName+"*appends*", appendedRules, features)
 	}
-	fmt.Printf("[souma-log] ourAppededHashes: %v\n", ourAppendedHashes)
 	allHashes = make([]string, len(ourInsertedHashes)+len(ourAppendedHashes)+numNonCalicoRules)
 	offset := 0
 	if t.insertMode == "append" {
@@ -736,6 +728,7 @@ func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]s
 	for scanner.Scan(){
 		// 1行ずつ取得
 		line := scanner.Bytes()
+		//fmt.Printf("[souma-log] %s\n", line)
 		logCxt := t.logCxt
 		//if debug {
 		//	logCxt = logCxt.WithField("line", string(line))
@@ -744,28 +737,30 @@ func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]s
 
 		// chain名を取得
 		// chainCreateRegexp = "// chainName: (.*)"
-		captures := chainCreateRegexp.FindSubmatch(line)
-		if captures != nil {
-			chainName := string(captures[1])
+		//captures := chainCreateRegexp.FindSubmatch(line)
+		//if captures != nil {
+		//	chainName := string(captures[1])
 			//if debug {
 			//	logCxt.WithField("chainName", chainName).Debug("Found forward-reference")
 			//}
-			hashes[chainName] = []string{}
-			continue
-		}
+		//	hashes[chainName] = []string{}
+		//	continue
+		//}
 
 		// ルールを取得
-		// appendRegexp = "(.*) // cali:(.*):(.*)"
-		captures = appendRegexp.FindSubmatch(line)
+		// appendRegexp = "// cali:([^:]+):(.+)"
+		captures := appendRegexp.FindSubmatch(line)
 		if captures == nil {
 			logCxt.Debug("Not an append, skipping")
 			continue
 		}
-		chainName := string(captures[2])
+		chainName := string(captures[1])
 
 		hash := ""
 		if captures != nil {
-			hash = string(fmt.Sprintf("%s:%s", captures[2], captures[3]))
+			hash = string(fmt.Sprintf("%s:%s", captures[1], captures[2]))
+		//	fmt.Printf("[souma-log]  chainName in rule: %s\n", chainName)
+		//	fmt.Printf("[souma-log]  hash in rule: %s\n", hash)
 			//if debug {
 			//	logCxt.WithField("hash", hash).Debug("Found hash in rule")
 			//}

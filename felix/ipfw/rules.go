@@ -39,7 +39,6 @@ func (r Rule) RenderRaw(prefixFragment string) string {
 
 func (r Rule) RenderAppend(chainName, prefixFragment string, features *environment.Features) string {
 	fragments := []string{}
-	//fmt.Printf("[souma-log] ChainName: %s, RuleNum: %d, Rule: %s\n", chainName, r.Number, r.renderInner(fragments, prefixFragment, features))
 	fragments = append(fragments, append(cmdshim.ADD_COMMAND, strconv.Itoa(int(r.Number)))...)
 	return r.renderInner(fragments, prefixFragment, features)
 }
@@ -199,13 +198,12 @@ func (c *Chain) Organize() error {
 		}
 	}
 	c.Number = start
-	//fmt.Printf("[souma-log] chain(%s) SetNewNumber setted: %d\n", c.Name, c.Number)
 
 	// rulesの先頭にChain名のコメント行を入れる
 	createChainRule := []Rule {
 		{
 			Action: CountAction{},
-			Comment: []string{fmt.Sprintf("chainName: %s", c.Name)},
+			//Comment: []string{fmt.Sprintf("chainName: %s", c.Name)},
 		},
 	}
 	c.Rules = append(createChainRule, c.Rules...)
@@ -213,7 +211,6 @@ func (c *Chain) Organize() error {
 	// rule番号の生成
 	for i, _ := range c.Rules {
 		c.Rules[i].Number = c.Number + uint16(i)
-		//fmt.Printf("[souma-log] Organize c.Number: %d, r.Number: %d\n", c.Number, c.Rules[i].Number)
 	}
 
 	_, ok := ChainNameToChain[c.Name]
@@ -307,12 +304,10 @@ func BytesToRestoreFile(rules []byte, path string) error {
 
 // 独自実装
 func SetChainNum(chainName string, num uint16) {
-	fmt.Printf("[souma-log] chainName is %s\n", chainName)
 	chain, ok := ChainNameToChain[chainName]
 	if ok {
 		chain.Number = num
 	} else {
-		fmt.Printf("[souma-log] NewChain: %s\n", chainName)
 		newChain := &Chain {
 			Name: chainName,
 			Number: num,
