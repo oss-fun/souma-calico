@@ -290,25 +290,6 @@ func NewRuleSet(
 	}
 	ruleset.restoreInputBuffer.NumLinesWritten = ruleset.countNumLinesExecuted
 
-	// TODO
-	/*
-	ruleset.chainNameToChain["INPUT"] = &Chain{
-		Name: "INPUT",
-		Number: 10,
-		Rules: []Rule{},
-	}
-	ruleset.chainNameToChain["OUTPUT"] = &Chain{
-		Name: "OUTPUT",
-		Number: 20,
-		Rules: []Rule{},
-	}
-	ruleset.chainNameToChain["FORWARD"] = &Chain{
-		Name: "FORWARD",
-		Number: 30,
-		Rules: []Rule{},
-	}
-	*/
-
 	if options.OnStillAlive != nil {
 		ruleset.onStillAlive = options.OnStillAlive
 	} else {
@@ -325,6 +306,7 @@ func NewRuleSet(
 // Chainへのルール追加
 // ・chainToAppendedRulesの更新
 func (t *RuleSet) InsertOrAppendRules(chainName string, rules []Rule) {
+	/*
 	t.logCxt.WithField("chainName", chainName).Debug("Updating rule insertions")
 	// 古いルールの取得
 	oldRules := t.chainToInsertedRules[chainName]
@@ -342,6 +324,8 @@ func (t *RuleSet) InsertOrAppendRules(chainName string, rules []Rule) {
 
 	// 再チェックと更新を促すためのキャシュ無効化
 	t.InvalidateDataplaneCache("insertion")
+	*/
+	t.AppendRules(chainName, rules)
 }
 
 // Chainへのルール追加（Append版）
@@ -380,8 +364,9 @@ func (t *RuleSet) UpdateChain(chain *Chain) {
 	}
 
 	// TODO
-	//if err := chain.Organize(); err != nil {	
-	//}
+	if err := chain.Organize(); err != nil {	
+		t.logCxt.WithError(err).WithField("chainName", chain.Name).Panic("Chain Organize failed")
+	}
 
 	// chainNameToChainの登録
 	t.chainNameToChain[chain.Name] = chain
@@ -502,10 +487,6 @@ func (t *RuleSet) loadDataplaneState() {
 			continue
 		}
 		dpHashes := dataplaneHashes[chainName]
-		//dpHashes, ok := dataplaneHashes[chainName]
-		//if !ok {
-		//	dpHashes = []string{}
-		//}
 		if !t.ourChainsRegexp.MatchString(chainName) {
 			// Not one of our chains so it may be one that we're inserting rules into.
 			insertedRules := t.chainToInsertedRules[chainName]
@@ -607,9 +588,9 @@ func (t *RuleSet) expectedHashesForInsertAppendChain(
 		ourInsertedHashes = CalculateRuleHashes(chainName, insertedRules, features)
 	}
 	if len(appendedRules) > 0 {
-		// Add *append* to chainName to produce a unique hash in case append chain/rules are same
+		// chainName to produce a unique hash in case append chain/rules are same
 		// as insert chain/rules above.
-		ourAppendedHashes = CalculateRuleHashes(chainName+"*appends*", appendedRules, features)
+		ourAppendedHashes = CalculateRuleHashes(chainName+"*append*", appendedRules, features)
 	}
 	allHashes = make([]string, len(ourInsertedHashes)+len(ourAppendedHashes)+numNonCalicoRules)
 	offset := 0

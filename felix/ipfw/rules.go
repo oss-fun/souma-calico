@@ -38,6 +38,7 @@ func (r Rule) RenderRaw(prefixFragment string) string {
 }
 
 func (r Rule) RenderAppend(chainName, prefixFragment string, features *environment.Features) string {
+	fmt.Printf("[souma-log] chainName: %v\n", chainName)
 	fragments := []string{}
 	fragments = append(fragments, append(cmdshim.ADD_COMMAND, strconv.Itoa(int(r.Number)))...)
 	return r.renderInner(fragments, prefixFragment, features)

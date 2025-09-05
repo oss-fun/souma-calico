@@ -409,8 +409,8 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 	ipfwTableV4 := ipfwtable.NewIpfwTable(ipfwtableConfigV4, dp.loopSummarizer)
 	dp.ipfwNATRuleSet = append(dp.ipfwNATRuleSet, natRuleSetV4)
 	dp.ipfwRawRuleSet = append(dp.ipfwRawRuleSet, rawRuleSetV4)
-	dp.ipfwNATRuleSet = append(dp.ipfwMangleRuleSet, mangleRuleSetV4)
-	dp.ipfwNATRuleSet = append(dp.ipfwFilterRuleSet, filterRuleSetV4)
+	dp.ipfwMangleRuleSet = append(dp.ipfwMangleRuleSet, mangleRuleSetV4)
+	dp.ipfwFilterRuleSet = append(dp.ipfwFilterRuleSet, filterRuleSetV4)
 	dp.ipfwTable = append(dp.ipfwTable, ipfwTableV4)
 
 	dp.endpointStatusCombiner = newEndpointStatusCombiner(dp.fromDataplane, config.IPv6Enabled)
@@ -892,15 +892,17 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 	for _, t := range d.ipfwRawRuleSet {
 		rawChains := d.ruleRenderer.StaticRawTableChains(t.IPVersion)
 		t.UpdateChains(rawChains)
-		t.AppendRules("PREROUTING", []ipfw.Rule{{
-			Number: 11,
-			Action: ipfw.CallAction{Target: rules.ChainRawPrerouting},
-		}})
-		t.AppendRules("PREROUTING", []ipfw.Rule{{
-			Number: 31,
-			Action: ipfw.CallAction{Target: rules.ChainRawPrerouting},
-		}})
-		t.AppendRules("OUTPUT", []ipfw.Rule{{
+		t.InsertOrAppendRules("Raw-PREROUTING", []ipfw.Rule{
+			{
+				Number: 11,
+				Action: ipfw.CallAction{Target: rules.ChainRawPrerouting},
+			},
+			{
+				Number: 31,
+				Action: ipfw.CallAction{Target: rules.ChainRawPrerouting},
+			},
+		})
+		t.InsertOrAppendRules("Raw-OUTPUT", []ipfw.Rule{{
 			Number: 21,
 			Action: ipfw.CallAction{Target: rules.ChainRawOutput},
 		}})
@@ -908,62 +910,70 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 	for _, t := range d.ipfwFilterRuleSet {
 		filterChains := d.ruleRenderer.StaticFilterTableChains(t.IPVersion)
 		t.UpdateChains(filterChains)
-		t.AppendRules("FORWARD", []ipfw.Rule{{
+		t.InsertOrAppendRules("Filter-FORWARD", []ipfw.Rule{{
 			Number: 34,
 			Action: ipfw.CallAction{Target: rules.ChainFilterForward},
 		}})
-		t.AppendRules("INPUT", []ipfw.Rule{{
+		t.InsertOrAppendRules("Filter-INPUT", []ipfw.Rule{{
 			Number: 14,
 			Action: ipfw.CallAction{Target: rules.ChainFilterInput},
 		}})
-		t.AppendRules("OUTPUT", []ipfw.Rule{{
+		t.InsertOrAppendRules("Filter-OUTPUT", []ipfw.Rule{{
 			Number: 23,
 			Action: ipfw.CallAction{Target: rules.ChainFilterOutput},
 		}})
 
-		t.AppendRules("FORWARD", d.ruleRenderer.StaticFilterForwardAppendRules())
+		t.AppendRules("Filter-FORWARD", d.ruleRenderer.StaticFilterForwardAppendRules())
 	}
 	for _, t := range d.ipfwNATRuleSet {
 		t.UpdateChains(d.ruleRenderer.StaticNATTableChains(t.IPVersion))
-		t.AppendRules("PREROUTING", []ipfw.Rule{{
-			Number: 13,
-			Action: ipfw.CallAction{Target: rules.ChainNATPrerouting},
-		}})
-		t.AppendRules("PREROUTING", []ipfw.Rule{{
-			Number: 33,
-			Action: ipfw.CallAction{Target: rules.ChainNATPrerouting},
-		}})
-		t.AppendRules("POSTROUTING", []ipfw.Rule{{
-			Number: 25,
-			Action: ipfw.CallAction{Target: rules.ChainNATPostrouting},
-		}})
-		t.AppendRules("POSTROUTING", []ipfw.Rule{{
-			Number: 36,
-			Action: ipfw.CallAction{Target: rules.ChainNATPostrouting},
-		}})
-		t.AppendRules("OUTPUT", []ipfw.Rule{{
+		t.InsertOrAppendRules("NAT-PREROUTING", []ipfw.Rule{
+			{
+				Number: 13,
+				Action: ipfw.CallAction{Target: rules.ChainNATPrerouting},
+			},
+			{
+				Number: 33,
+				Action: ipfw.CallAction{Target: rules.ChainNATPrerouting},
+			},
+		})
+		t.AppendRules("NAT-POSTROUTING", []ipfw.Rule{
+			{
+				Number: 25,
+				Action: ipfw.CallAction{Target: rules.ChainNATPostrouting},
+			},
+			{
+				Number: 36,
+				Action: ipfw.CallAction{Target: rules.ChainNATPostrouting},
+			},
+		})
+		t.InsertOrAppendRules("NAT-OUTPUT", []ipfw.Rule{{
 			Number: 22,
 			Action: ipfw.CallAction{Target: rules.ChainNATOutput},
 		}})
 	}
 	for _, t := range d.ipfwMangleRuleSet {
 		t.UpdateChains(d.ruleRenderer.StaticMangleTableChains(t.IPVersion))
-		t.AppendRules("PREROUTING", []ipfw.Rule{{
-			Number: 12,
-			Action: ipfw.CallAction{Target: rules.ChainManglePrerouting},
-		}})
-		t.AppendRules("PREROUTING", []ipfw.Rule{{
-			Number: 32,
-			Action: ipfw.CallAction{Target: rules.ChainManglePrerouting},
-		}})
-		t.AppendRules("POSTROUTING", []ipfw.Rule{{
-			Number: 24,
-			Action: ipfw.CallAction{Target: rules.ChainManglePostrouting},
-		}})
-		t.AppendRules("POSTROUTING", []ipfw.Rule{{
-			Number: 35,
-			Action: ipfw.CallAction{Target: rules.ChainManglePostrouting},
-		}})
+		t.InsertOrAppendRules("Mangle-PREROUTING", []ipfw.Rule{
+			{
+				Number: 12,
+				Action: ipfw.CallAction{Target: rules.ChainManglePrerouting},
+			},
+			{
+				Number: 32,
+				Action: ipfw.CallAction{Target: rules.ChainManglePrerouting},
+			},
+		})
+		t.InsertOrAppendRules("Mangle-POSTROUTING", []ipfw.Rule{
+			{
+				Number: 24,
+				Action: ipfw.CallAction{Target: rules.ChainManglePostrouting},
+			},
+			{
+				Number: 35,
+				Action: ipfw.CallAction{Target: rules.ChainManglePostrouting},
+			},
+		})
 	}
 }
 
