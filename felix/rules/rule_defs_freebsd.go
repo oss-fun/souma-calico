@@ -36,14 +36,14 @@ const (
 	// adds its own "-" so it isn't included here.
 	IpfwTableNamePrefix = ipfwtable.IpfwTableNamePrefix
 
-	ChainFilterInput   = ChainNamePrefix + "Filter-INPUT"
-	ChainFilterForward = ChainNamePrefix + "Filter-FORWARD"
-	ChainFilterOutput  = ChainNamePrefix + "Filter-OUTPUT"
+	ChainFilterInput   = ChainNamePrefix + "FILTER-INPUT"
+	ChainFilterForward = ChainNamePrefix + "FILTER-FORWARD"
+	ChainFilterOutput  = ChainNamePrefix + "FILTER-OUTPUT"
 
-	ChainRawPrerouting         = ChainNamePrefix + "Raw-PREROUTING"
-	ChainRawOutput             = ChainNamePrefix + "Raw-OUTPUT"
-	ChainRawUntrackedFlows     = ChainNamePrefix + "Raw-untracked-flows"
-	ChainRawBPFUntrackedPolicy = ChainNamePrefix + "Raw-untracked-policy"
+	ChainRawPrerouting         = ChainNamePrefix + "RAW-PREROUTING"
+	ChainRawOutput             = ChainNamePrefix + "RAW-OUTPUT"
+	ChainRawUntrackedFlows     = ChainNamePrefix + "RAW-untracked-flows"
+	ChainRawBPFUntrackedPolicy = ChainNamePrefix + "RAW-untracked-policy"
 
 	ChainFailsafeIn  = ChainNamePrefix + "failsafe-in"
 	ChainFailsafeOut = ChainNamePrefix + "failsafe-out"
@@ -51,10 +51,10 @@ const (
 	ChainNATPrerouting  = ChainNamePrefix + "NAT-PREROUTING"
 	ChainNATPostrouting = ChainNamePrefix + "NAT-POSTROUTING"
 	ChainNATOutput      = ChainNamePrefix + "NAT-OUTPUT"
-	ChainNATOutgoing    = ChainNamePrefix + "nat-outgoing"
+	ChainNATOutgoing    = ChainNamePrefix + "NAT-nat-outgoing"
 
-	ChainManglePrerouting  = ChainNamePrefix + "Mangle-PREROUTING"
-	ChainManglePostrouting = ChainNamePrefix + "Mangle-POSTROUTING"
+	ChainManglePrerouting  = ChainNamePrefix + "MANGLE-PREROUTING"
+	ChainManglePostrouting = ChainNamePrefix + "MANGLE-POSTROUTING"
 
 	IpfwTableIDNATOutgoingAllPools  = "all-ipam-pools"
 	IpfwTableIDNATOutgoingMasqPools = "masq-ipam-pools"

@@ -709,24 +709,7 @@ func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]s
 	for scanner.Scan(){
 		// 1行ずつ取得
 		line := scanner.Bytes()
-		//fmt.Printf("[souma-log] %s\n", line)
 		logCxt := t.logCxt
-		//if debug {
-		//	logCxt = logCxt.WithField("line", string(line))
-		//	logCxt.Debug("Parsing line")
-		//}
-
-		// chain名を取得
-		// chainCreateRegexp = "// chainName: (.*)"
-		//captures := chainCreateRegexp.FindSubmatch(line)
-		//if captures != nil {
-		//	chainName := string(captures[1])
-			//if debug {
-			//	logCxt.WithField("chainName", chainName).Debug("Found forward-reference")
-			//}
-		//	hashes[chainName] = []string{}
-		//	continue
-		//}
 
 		// ルールを取得
 		// appendRegexp = "// cali:([^:]+):(.+)"
@@ -736,15 +719,14 @@ func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]s
 			continue
 		}
 		chainName := string(captures[1])
+		if !strings.Contains(chainName, strings.ToUpper(t.Name)) {
+			logCxt.Debug("Table hasn't Chain")
+			continue
+		}
 
 		hash := ""
 		if captures != nil {
 			hash = string(fmt.Sprintf("%s:%s", captures[1], captures[2]))
-		//	fmt.Printf("[souma-log]  chainName in rule: %s\n", chainName)
-		//	fmt.Printf("[souma-log]  hash in rule: %s\n", hash)
-			//if debug {
-			//	logCxt.WithField("hash", hash).Debug("Found hash in rule")
-			//}
 			chainHasCalicoRule.Add(chainName)
 		}
 		hashes[chainName] = append(hashes[chainName], hash)
@@ -754,11 +736,6 @@ func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]s
 		return nil, nil, scanner.Err()
 	}
 
-	//for chainName := range rules {
-	//	if !chainHasCalicoRule.Contains(chainName) {
-	//		delete(rules, chainName)
-	//	}
-	//}
 	t.logCxt.Debugf("Read hashes from dataplane: %#v", hashes)
 	t.logCxt.Debugf("Read rules from dataplane: %#v", rules)
 	return hashes, rules, nil
