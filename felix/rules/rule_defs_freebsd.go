@@ -156,6 +156,11 @@ var (
 
 		// Pre Felix v2.1.
 		"felix-",
+
+		/*
+		// for FreeBSD
+		"ex-",
+		*/
 	}
 	// AllHistoricIpfwTableNamePrefixes, similarly contains all the prefixes we've ever used for IP
 	// sets.

@@ -37,10 +37,10 @@ var (
 
 	// List of all the top-level kernel-created chains by iptables table.
 	tableToKernelChains = map[string][]string{
-		"filter": {"INPUT", "FORWARD", "OUTPUT"},
-		"nat":    {"PREROUTING", "INPUT", "OUTPUT", "POSTROUTING"},
-		"mangle": {"PREROUTING", "INPUT", "FORWARD", "OUTPUT", "POSTROUTING"},
-		"raw":    {"PREROUTING", "OUTPUT"},
+		"filter": {"FILETR-INPUT", "FILTER-FORWARD", "FILTER-OUTPUT"},
+		"nat":    {"NAT-PREROUTING", "NAT-INPUT", "NAT-OUTPUT", "NAT-POSTROUTING"},
+		"mangle": {"MANGLE-PREROUTING", "MANGLE-INPUT", "MANGLE-FORWARD", "MANGLE-OUTPUT", "MANGLE-POSTROUTING"},
+		"raw":    {"RAW-PREROUTING", "RAW-OUTPUT"},
 	}
 
 	countNumRestoreCalls = prometheus.NewCounter(prometheus.CounterOpts{

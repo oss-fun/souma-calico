@@ -82,11 +82,11 @@ func (m MatchCriteria) NotSourceTable(name string) MatchCriteria {
 }
 
 func (m MatchCriteria) DestTable(name string) MatchCriteria {
-	return append(m, fmt.Sprintf("to table(%s)", name))
+	return append(m, fmt.Sprintf(`to table\(%s\)`, name))
 }
 
 func (m MatchCriteria) NotDestTable(name string) MatchCriteria {
-	return append(m, fmt.Sprintf("to not table(%s)", name))
+	return append(m, fmt.Sprintf(`to not table\(%s\)`, name))
 }
 
 func (m MatchCriteria) TableNames() (tableNames []string) {

@@ -16,6 +16,7 @@ package rules
 
 import (
 	"fmt"
+	"os/exec"
 
 	log "github.com/sirupsen/logrus"
 
@@ -74,7 +75,7 @@ func (r *DefaultRuleRenderer) StaticFilterInputForwardCheckChain(ipVersion uint8
 		// If packet belongs to an existing conntrack connection, it does not belong to a forwarded traffic even destination ip is a
 		// service ip. This could happen when pod send back response to a local host process accessing a service ip.
 		Rule{
-			Match:  Match().ConntrackState("RELATED,ESTABLISHED"),
+			Match:  Match().ConntrackState("established"),
 			Action: ReturnAction{},
 		},
 	)
@@ -87,14 +88,14 @@ func (r *DefaultRuleRenderer) StaticFilterInputForwardCheckChain(ipVersion uint8
 					DestPortRanges(portSplit).
 					DestTable(hostIpfwTable),
 				Action:  SkiptoAction{Target: ChainDispatchSetEndPointTag},
-				Comment: []string{"To kubernetes NodePort service"},
+				Comment: []string{},
 			},
 			Rule{
 				Match: Match().Protocol("udp").
 					DestPortRanges(portSplit).
 					DestTable(hostIpfwTable),
 				Action:  SkiptoAction{Target: ChainDispatchSetEndPointTag},
-				Comment: []string{"To kubernetes NodePort service"},
+				Comment: []string{},
 			},
 		)
 	}
@@ -104,7 +105,7 @@ func (r *DefaultRuleRenderer) StaticFilterInputForwardCheckChain(ipVersion uint8
 		Rule{
 			Match:   Match().NotDestTable(hostIpfwTable),
 			Action:  CallAction{Target: ChainDispatchSetEndPointTag},
-			Comment: []string{"To kubernetes service"},
+			Comment: []string{},
 		},
 	)
 
@@ -183,7 +184,7 @@ func (r *DefaultRuleRenderer) StaticFilterOutputForwardEndpointMarkChain() *Chai
 		Rule{
 			Match:   Match().Tagged(r.IpfwTagAccept),
 			Action:  r.filterAllowAction,
-			Comment: []string{"Policy explicitly accepted packet."},
+			Comment: []string{},
 		},
 	)
 
@@ -234,7 +235,7 @@ func (r *DefaultRuleRenderer) filterInputChain(ipVersion uint8) *Chain {
 		Rule{
 			Match:   Match().Tagged(r.IpfwTagAccept),
 			Action:  r.filterAllowAction,
-			Comment: []string{"Host endpoint policy accepted packet."},
+			Comment: []string{},
 		},
 	)
 
@@ -340,7 +341,7 @@ func (r *DefaultRuleRenderer) filterWorkloadToHostChain(ipVersion uint8) *Chain 
 	for _, action := range r.inputAllowActions {
 		rules = append(rules, Rule{
 			Action:  action,
-			Comment: []string{"Configured DefaultEndpointToHostAction"},
+			Comment: []string{},
 		})
 	}
 
@@ -573,7 +574,7 @@ func (r *DefaultRuleRenderer) StaticFilterForwardAppendRules() []Rule {
 		{
 			Match:   Match().Tagged(r.IpfwTagAccept),
 			Action:  r.filterAllowAction,
-			Comment: []string{"Policy explicitly accepted packet."},
+			Comment: []string{},
 		},
 
 		// Set IpfwTagAccept bit here, to indicate to our mangle-POSTROUTING chain that this is
@@ -636,7 +637,7 @@ func (r *DefaultRuleRenderer) filterOutputChain(ipVersion uint8) *Chain {
 		Rule{
 			Match:   Match().Tagged(r.IpfwTagAccept),
 			Action:  r.filterAllowAction,
-			Comment: []string{"Host endpoint policy accepted packet."},
+			Comment: []string{},
 		},
 	)
 
@@ -651,75 +652,23 @@ func (r *DefaultRuleRenderer) filterOutputChain(ipVersion uint8) *Chain {
 }
 
 func (r *DefaultRuleRenderer) StaticNATTableChains(ipVersion uint8) (chains []*Chain) {
-	chains = append(chains, r.StaticNATPreroutingChains(ipVersion)...)
+	StaticNATConfig()
 	chains = append(chains, r.StaticNATPostroutingChains(ipVersion)...)
-	chains = append(chains, r.StaticNATOutputChains(ipVersion)...)
 	return
 }
 
 func (r *DefaultRuleRenderer) StaticNATPreroutingChains(ipVersion uint8) []*Chain {
-	rules := []Rule{
-		{
-			Action: CallAction{Target: ChainFIPDnat},
-		},
-	}
-
-	if ipVersion == 4 && r.OpenStackSpecialCasesEnabled && r.OpenStackMetadataIP != nil {
-		rules = append(rules, Rule{
-			Match: Match().
-				Protocol("tcp").
-				DestPorts(80).
-				DestNet("169.254.169.254/32"),
-			Action: NatAction{},
-		})
-	}
-
-	chains := []*Chain{{
-		Name:  ChainNATPrerouting,
-		Rules: rules,
-	}}
-
-	for _, v := range chains {
-		if err := v.Organize(); err != nil {
-			log.WithField("err", err).Panic("Failed StaticFilterForwardChains result Organize")
-		}
-	}
+	chains := []*Chain{}
 	return chains
 }
 
 func (r *DefaultRuleRenderer) StaticNATPostroutingChains(ipVersion uint8) []*Chain {
 	rules := []Rule{
 		{
-			Action: CallAction{Target: ChainFIPSnat},
-		},
-		{
 			Action: CallAction{Target: ChainNATOutgoing},
 		},
 	}
 
-	var tunnelIfaces []string
-
-	for _, tunnel := range tunnelIfaces {
-		// Add a rule to catch packets that are being sent down a tunnel from an
-		// incorrect local IP address of the host and NAT them to use the tunnel IP as its
-		// source.  This happens if:
-		//
-		// - the user explicitly binds their socket to the wrong source IP accidentally
-		// - the user sends traffic to, for example, a Kubernetes service IP, which is
-		//   implemented via NAT instead of routing, leading the kernel to choose the
-		//   wrong source IP.
-		//
-		// We NAT the source of the packet to use the tunnel IP.  We assume that
-		// non-local IPs have been correctly routed.  Since Calico-assigned IPs are
-		// non-local (because they're down a veth), they won't get caught by the rule.
-		// Other remote sources will only reach the tunnel if they're being NATted
-		// already (for example, a Kubernetes "NodePort").  The kernel will then
-		// choose the correct source on its own.
-		rules = append(rules, Rule{
-			Match: Match().OutInterface(tunnel),
-			Action: NatAction{},
-		})
-	}
 	results := []*Chain{{
 		Name:  ChainNATPostrouting,
 		Rules: rules,
@@ -733,22 +682,19 @@ func (r *DefaultRuleRenderer) StaticNATPostroutingChains(ipVersion uint8) []*Cha
 }
 
 func (r *DefaultRuleRenderer) StaticNATOutputChains(ipVersion uint8) []*Chain {
-	rules := []Rule{
-		{
-			Action: CallAction{Target: ChainFIPDnat},
-		},
-	}
+	chains := []*Chain{}
+	return chains
+}
 
-	results := []*Chain{{
-		Name:  ChainNATOutput,
-		Rules: rules,
-	}}
-	for _, v := range results {
-		if err := v.Organize(); err != nil {
-			log.WithField("err", err).Panic("Failed StaticNATOutputChains result Organize")
-		}
+func StaticNATConfig() {
+	// TODO
+	// テスト環境にのみ対応
+	// 環境変数や引数から外への通信をするIF名を取得できるようにする
+	nc := NewNatConfig(1).Iface("em0").UnregOnly().Reset()
+
+	if err := exec.Command(nc.CmdString()).Run(); err != nil {
+		log.WithError(err).Panic("StaticNATConfig Failed.")
 	}
-	return results
 }
 
 func (r *DefaultRuleRenderer) StaticMangleTableChains(ipVersion uint8) []*Chain {
@@ -778,7 +724,7 @@ func (r *DefaultRuleRenderer) StaticManglePreroutingChain(ipVersion uint8) *Chai
 	// IpfwMangleAllowAction to be RETURN.)
 	rules = append(rules,
 		Rule{
-			Match:  Match().ConntrackState("RELATED,ESTABLISHED"),
+			Match:  Match().ConntrackState("established"),
 			Action: r.mangleAllowAction,
 		},
 	)
@@ -807,7 +753,7 @@ func (r *DefaultRuleRenderer) StaticManglePreroutingChain(ipVersion uint8) *Chai
 		Rule{
 			Match:   Match().Tagged(r.IpfwTagAccept),
 			Action:  r.mangleAllowAction,
-			Comment: []string{"Host endpoint policy accepted packet."},
+			Comment: []string{},
 		},
 	)
 
@@ -860,13 +806,13 @@ func (r *DefaultRuleRenderer) StaticManglePostroutingChain(ipVersion uint8) *Cha
 			Action: UntagAction{TagNumber: r.allCalicoTagNum()},
 		},
 		Rule{
-			Match:  Match().ConntrackState("DNAT"),
+			Match:  Match().ConntrackState("established"), // DNAT
 			Action: CallAction{Target: ChainDispatchToHostEndpoint},
 		},
 		Rule{
 			Match:   Match().Tagged(r.IpfwTagAccept),
 			Action:  ReturnAction{},
-			Comment: []string{"Host endpoint policy accepted packet."},
+			Comment: []string{},
 		},
 	)
 

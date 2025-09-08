@@ -1048,11 +1048,11 @@ func setUpIptablesCompatible() error {
 	}
 
 	// TODO
-	ipfw.SetChainNum("INPUT", IN_RULE)
-	ipfw.SetChainNum("OUTPUT", OUT_RULE)
-	ipfw.SetChainNum("FORWARD", FOR_RULE)
-	ipfw.SetChainNum("PREROUTING", 40)
-	ipfw.SetChainNum("POSTROUTING", 50)
+	//ipfw.SetChainNum("INPUT", IN_RULE)
+	//ipfw.SetChainNum("OUTPUT", OUT_RULE)
+	//ipfw.SetChainNum("FORWARD", FOR_RULE)
+	//ipfw.SetChainNum("PREROUTING", 40)
+	//ipfw.SetChainNum("POSTROUTING", 50)
 
 	if err := ipfw.RulesToRestoreFile(firstRule, RESTORE_FILE); err != nil {
 		return fmt.Errorf("RulesToRestoreFile failed: %v", err)
