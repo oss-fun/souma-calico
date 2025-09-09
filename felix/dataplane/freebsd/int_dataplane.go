@@ -910,24 +910,24 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 	for _, t := range d.ipfwFilterRuleSet {
 		filterChains := d.ruleRenderer.StaticFilterTableChains(t.IPVersion)
 		t.UpdateChains(filterChains)
-		t.InsertOrAppendRules("FILTER-FORWARD", []ipfw.Rule{{
+		t.InsertOrAppendRules("F-FORWARD", []ipfw.Rule{{
 			Number: 34,
 			Action: ipfw.CallAction{Target: rules.ChainFilterForward},
 		}})
-		t.InsertOrAppendRules("FILTER-INPUT", []ipfw.Rule{{
+		t.InsertOrAppendRules("F-INPUT", []ipfw.Rule{{
 			Number: 14,
 			Action: ipfw.CallAction{Target: rules.ChainFilterInput},
 		}})
-		t.InsertOrAppendRules("FILTER-OUTPUT", []ipfw.Rule{{
+		t.InsertOrAppendRules("F-OUTPUT", []ipfw.Rule{{
 			Number: 23,
 			Action: ipfw.CallAction{Target: rules.ChainFilterOutput},
 		}})
 
-		t.AppendRules("FILTER-FORWARD", d.ruleRenderer.StaticFilterForwardAppendRules())
+		t.AppendRules("F-FORWARD", d.ruleRenderer.StaticFilterForwardAppendRules())
 	}
 	for _, t := range d.ipfwNATRuleSet {
 		t.UpdateChains(d.ruleRenderer.StaticNATTableChains(t.IPVersion))
-		t.InsertOrAppendRules("NAT-PREROUTING", []ipfw.Rule{
+		t.InsertOrAppendRules("N-PREROUTING", []ipfw.Rule{
 			{
 				Number: 13,
 				Action: ipfw.CallAction{Target: rules.ChainNATPrerouting},
@@ -937,7 +937,7 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 				Action: ipfw.CallAction{Target: rules.ChainNATPrerouting},
 			},
 		})
-		t.AppendRules("NAT-POSTROUTING", []ipfw.Rule{
+		t.AppendRules("N-POSTROUTING", []ipfw.Rule{
 			{
 				Number: 25,
 				Action: ipfw.CallAction{Target: rules.ChainNATPostrouting},
@@ -947,14 +947,14 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 				Action: ipfw.CallAction{Target: rules.ChainNATPostrouting},
 			},
 		})
-		t.InsertOrAppendRules("NAT-OUTPUT", []ipfw.Rule{{
+		t.InsertOrAppendRules("N-OUTPUT", []ipfw.Rule{{
 			Number: 22,
 			Action: ipfw.CallAction{Target: rules.ChainNATOutput},
 		}})
 	}
 	for _, t := range d.ipfwMangleRuleSet {
 		t.UpdateChains(d.ruleRenderer.StaticMangleTableChains(t.IPVersion))
-		t.InsertOrAppendRules("MANGLE-PREROUTING", []ipfw.Rule{
+		t.InsertOrAppendRules("M-PREROUTING", []ipfw.Rule{
 			{
 				Number: 12,
 				Action: ipfw.CallAction{Target: rules.ChainManglePrerouting},
@@ -964,7 +964,7 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 				Action: ipfw.CallAction{Target: rules.ChainManglePrerouting},
 			},
 		})
-		t.InsertOrAppendRules("MANGLE-POSTROUTING", []ipfw.Rule{
+		t.InsertOrAppendRules("M-POSTROUTING", []ipfw.Rule{
 			{
 				Number: 24,
 				Action: ipfw.CallAction{Target: rules.ChainManglePostrouting},

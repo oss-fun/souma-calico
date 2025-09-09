@@ -37,10 +37,10 @@ var (
 
 	// List of all the top-level kernel-created chains by iptables table.
 	tableToKernelChains = map[string][]string{
-		"filter": {"FILETR-INPUT", "FILTER-FORWARD", "FILTER-OUTPUT"},
-		"nat":    {"NAT-PREROUTING", "NAT-INPUT", "NAT-OUTPUT", "NAT-POSTROUTING"},
-		"mangle": {"MANGLE-PREROUTING", "MANGLE-INPUT", "MANGLE-FORWARD", "MANGLE-OUTPUT", "MANGLE-POSTROUTING"},
-		"raw":    {"RAW-PREROUTING", "RAW-OUTPUT"},
+		"filter": {"F-INPUT", "F-FORWARD", "F-OUTPUT"},
+		"nat":    {"N-PREROUTING", "N-INPUT", "N-OUTPUT", "N-POSTROUTING"},
+		"mangle": {"M-PREROUTING", "M-INPUT", "M-FORWARD", "M-OUTPUT", "M-POSTROUTING"},
+		"raw":    {"R-PREROUTING", "R-OUTPUT"},
 	}
 
 	countNumRestoreCalls = prometheus.NewCounter(prometheus.CounterOpts{
@@ -719,7 +719,7 @@ func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]s
 			continue
 		}
 		chainName := string(captures[1])
-		if !strings.Contains(chainName, strings.ToUpper(t.Name)) {
+		if !strings.Contains(chainName, tablePrefix(t.Name)) {
 			logCxt.Debug("Table hasn't Chain")
 			continue
 		}
@@ -739,6 +739,22 @@ func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]s
 	t.logCxt.Debugf("Read hashes from dataplane: %#v", hashes)
 	t.logCxt.Debugf("Read rules from dataplane: %#v", rules)
 	return hashes, rules, nil
+}
+
+func tablePrefix(tableName string) string {
+	switch tableName {
+	case "filter":
+		return "F-"
+	case "raw":
+		return "R-"
+	case "mangle":
+		return "M-"
+	case "nat":
+		return "N-"
+	default:
+		log.Panic("tablePrefix failed")
+		return "ERROR"
+	}
 }
 
 func (t *RuleSet) InvalidateDataplaneCache(reason string) {

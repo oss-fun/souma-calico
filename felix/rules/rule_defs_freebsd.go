@@ -36,25 +36,25 @@ const (
 	// adds its own "-" so it isn't included here.
 	IpfwTableNamePrefix = ipfwtable.IpfwTableNamePrefix
 
-	ChainFilterInput   = ChainNamePrefix + "FILTER-INPUT"
-	ChainFilterForward = ChainNamePrefix + "FILTER-FORWARD"
-	ChainFilterOutput  = ChainNamePrefix + "FILTER-OUTPUT"
+	ChainFilterInput   = ChainNamePrefix + "F-INPUT"
+	ChainFilterForward = ChainNamePrefix + "F-FORWARD"
+	ChainFilterOutput  = ChainNamePrefix + "F-OUTPUT"
 
-	ChainRawPrerouting         = ChainNamePrefix + "RAW-PREROUTING"
-	ChainRawOutput             = ChainNamePrefix + "RAW-OUTPUT"
-	ChainRawUntrackedFlows     = ChainNamePrefix + "RAW-untracked-flows"
-	ChainRawBPFUntrackedPolicy = ChainNamePrefix + "RAW-untracked-policy"
+	ChainRawPrerouting         = ChainNamePrefix + "R-PREROUTING"
+	ChainRawOutput             = ChainNamePrefix + "R-OUTPUT"
+	ChainRawUntrackedFlows     = ChainNamePrefix + "R-untracked-flows"
+	ChainRawBPFUntrackedPolicy = ChainNamePrefix + "R-untracked-policy"
 
 	ChainFailsafeIn  = ChainNamePrefix + "failsafe-in"
 	ChainFailsafeOut = ChainNamePrefix + "failsafe-out"
 
-	ChainNATPrerouting  = ChainNamePrefix + "NAT-PREROUTING"
-	ChainNATPostrouting = ChainNamePrefix + "NAT-POSTROUTING"
-	ChainNATOutput      = ChainNamePrefix + "NAT-OUTPUT"
-	ChainNATOutgoing    = ChainNamePrefix + "NAT-nat-outgoing"
+	ChainNATPrerouting  = ChainNamePrefix + "N-PREROUTING"
+	ChainNATPostrouting = ChainNamePrefix + "N-POSTROUTING"
+	ChainNATOutput      = ChainNamePrefix + "N-OUTPUT"
+	ChainNATOutgoing    = ChainNamePrefix + "N-nat-outgoing"
 
-	ChainManglePrerouting  = ChainNamePrefix + "MANGLE-PREROUTING"
-	ChainManglePostrouting = ChainNamePrefix + "MANGLE-POSTROUTING"
+	ChainManglePrerouting  = ChainNamePrefix + "M-PREROUTING"
+	ChainManglePostrouting = ChainNamePrefix + "M-POSTROUTING"
 
 	IpfwTableIDNATOutgoingAllPools  = "all-ipam-pools"
 	IpfwTableIDNATOutgoingMasqPools = "masq-ipam-pools"
@@ -79,16 +79,22 @@ const (
 	ChainWorkloadToHost       = ChainNamePrefix + "wl-to-host"
 	ChainFromWorkloadDispatch = ChainNamePrefix + "from-wl-dispatch"
 	ChainToWorkloadDispatch   = ChainNamePrefix + "to-wl-dispatch"
+	ChainFilterToWorkloadDispatch   = ChainNamePrefix + "F-" + "to-wl-dispatch"
 
 	ChainDispatchToHostEndpoint          = ChainNamePrefix + "to-host-endpoint"
 	ChainDispatchFromHostEndpoint        = ChainNamePrefix + "from-host-endpoint"
 	ChainDispatchToHostEndpointForward   = ChainNamePrefix + "to-hep-forward"
+	ChainFilterDispatchToHostEndpointForward   = ChainNamePrefix + "F-" + "to-hep-forward"
 	ChainDispatchFromHostEndPointForward = ChainNamePrefix + "from-hep-forward"
 	ChainDispatchSetEndPointTag          = ChainNamePrefix + "set-endpoint-tag"
+	ChainFilterDispatchSetEndPointTag    = ChainNamePrefix + "F-" + "set-endpoint-tag"
 	ChainDispatchFromEndPointTag         = ChainNamePrefix + "from-endpoint-tag"
+	ChainFilterDispatchFromEndPointTag   = ChainNamePrefix + "F-" + "from-endpoint-tag"
 
 	ChainForwardCheck        = ChainNamePrefix + "forward-check"
+	ChainFilterForwardCheck  = ChainNamePrefix + "F-forward-check"
 	ChainForwardEndpointTag = ChainNamePrefix + "forward-endpoint-tag"
+	ChainFilterForwardEndpointTag = ChainNamePrefix + "F-" + "forward-endpoint-tag"
 
 	ChainSetWireguardIncomingMark = ChainNamePrefix + "wireguard-incoming-mark"
 
@@ -156,11 +162,6 @@ var (
 
 		// Pre Felix v2.1.
 		"felix-",
-
-		/*
-		// for FreeBSD
-		"ex-",
-		*/
 	}
 	// AllHistoricIpfwTableNamePrefixes, similarly contains all the prefixes we've ever used for IP
 	// sets.

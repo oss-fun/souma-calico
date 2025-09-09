@@ -87,14 +87,14 @@ func (r *DefaultRuleRenderer) StaticFilterInputForwardCheckChain(ipVersion uint8
 				Match: Match().Protocol("tcp").
 					DestPortRanges(portSplit).
 					DestTable(hostIpfwTable),
-				Action:  SkiptoAction{Target: ChainDispatchSetEndPointTag},
+				Action:  SkiptoAction{Target: ChainFilterDispatchSetEndPointTag},
 				Comment: []string{},
 			},
 			Rule{
 				Match: Match().Protocol("udp").
 					DestPortRanges(portSplit).
 					DestTable(hostIpfwTable),
-				Action:  SkiptoAction{Target: ChainDispatchSetEndPointTag},
+				Action:  SkiptoAction{Target: ChainFilterDispatchSetEndPointTag},
 				Comment: []string{},
 			},
 		)
@@ -104,13 +104,13 @@ func (r *DefaultRuleRenderer) StaticFilterInputForwardCheckChain(ipVersion uint8
 		// If packet is accessing non local host ip, it belongs to a forwarded traffic.
 		Rule{
 			Match:   Match().NotDestTable(hostIpfwTable),
-			Action:  CallAction{Target: ChainDispatchSetEndPointTag},
+			Action:  CallAction{Target: ChainFilterDispatchSetEndPointTag},
 			Comment: []string{},
 		},
 	)
 
 	result := &Chain{
-		Name:  ChainForwardCheck,
+		Name:  ChainFilterForwardCheck,
 		Rules: fwRules,
 	}
 	if err := result.Organize(); err != nil {
@@ -137,7 +137,7 @@ func (r *DefaultRuleRenderer) StaticFilterOutputForwardEndpointMarkChain() *Chai
 		// traffic.
 		Rule{
 			Match:  Match().NotTagged(r.IpfwTagEndpoint),
-			Action: CallAction{Target: ChainDispatchFromEndPointTag},
+			Action: CallAction{Target: ChainFilterDispatchFromEndPointTag},
 		},
 	)
 
@@ -149,7 +149,7 @@ func (r *DefaultRuleRenderer) StaticFilterOutputForwardEndpointMarkChain() *Chai
 		fwRules = append(fwRules,
 			Rule{
 				Match:  Match().OutInterface(ifaceMatch),
-				Action: CallAction{Target: ChainToWorkloadDispatch},
+				Action: CallAction{Target: ChainFilterToWorkloadDispatch},
 			},
 		)
 	}
@@ -159,7 +159,7 @@ func (r *DefaultRuleRenderer) StaticFilterOutputForwardEndpointMarkChain() *Chai
 		// apply-on-forward dispatch chain. That chain returns any packets that are not going to a
 		// known host endpoint for further processing.
 		Rule{
-			Action: CallAction{Target: ChainDispatchToHostEndpointForward},
+			Action: CallAction{Target: ChainFilterDispatchToHostEndpointForward},
 		},
 
 		// Before we ACCEPT the packet, clear the per-interface mark bit.  This is required because
@@ -189,7 +189,7 @@ func (r *DefaultRuleRenderer) StaticFilterOutputForwardEndpointMarkChain() *Chai
 	)
 
 	result := &Chain{
-		Name:  ChainForwardEndpointTag,
+		Name:  ChainFilterForwardEndpointTag,
 		Rules: fwRules,
 	}
 	if err := result.Organize(); err != nil {
