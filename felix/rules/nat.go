@@ -50,7 +50,7 @@ func (r *DefaultRuleRenderer) MakeNatOutgoingRule(protocol string, action ipfw.A
 func (r *DefaultRuleRenderer) NATOutgoingChain(natOutgoingActive bool, ipVersion uint8) *ipfw.Chain {
 	var rules []ipfw.Rule
 	if natOutgoingActive {
-		var defaultSnatRule ipfw.Action = ipfw.NatAction{}
+		var defaultSnatRule ipfw.Action = ipfw.NatAction{NatNumber: 1}
 
 		rules = []ipfw.Rule{
 			r.MakeNatOutgoingRule("", defaultSnatRule, ipVersion),

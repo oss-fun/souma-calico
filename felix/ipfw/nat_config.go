@@ -35,7 +35,7 @@ func GetNatRuleNumber(d string) int {
 }
 
 func (nc NatConfig) CmdString() string {
-	return fmt.Sprintf("ipfw nat %d config %s", nc.number, strings.Join([]string(nc.options), " "))
+	return fmt.Sprintf("nat %d config %s", nc.number, strings.Join([]string(nc.options), " "))
 }
 
 func (nc NatConfig) Ip(ip string) NatConfig {

@@ -692,7 +692,7 @@ func StaticNATConfig() {
 	// 環境変数や引数から外への通信をするIF名を取得できるようにする
 	nc := NewNatConfig(1).Iface("em0").UnregOnly().Reset()
 
-	if err := exec.Command(nc.CmdString()).Run(); err != nil {
+	if err := exec.Command("ipfw", nc.CmdString()).Run(); err != nil {
 		log.WithError(err).Panic("StaticNATConfig Failed.")
 	}
 }

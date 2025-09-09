@@ -55,8 +55,9 @@ func (a CallAction) String() string {
 		return fmt.Sprintf("call %d", a.RuleNumber)
 	}
 	if a.Target != "" {
-		if ChainNameToChain[a.Target].Number != 0 {
-			return fmt.Sprintf("call %d", ChainNameToChain[a.Target].Number)
+		c, ok := ChainNameToChain[a.Target]
+		if ok {
+			return fmt.Sprintf("call %d", c.Number)
 		} else {
 			n, err := SetNewNumber()
 			if err != nil {

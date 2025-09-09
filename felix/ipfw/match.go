@@ -74,11 +74,11 @@ func (m MatchCriteria) NotDestNet(net string) MatchCriteria {
 }
 
 func (m MatchCriteria) SourceTable(name string) MatchCriteria {
-	return append(m, fmt.Sprintf("ip from table(%s)", name))
+	return append(m, fmt.Sprintf(`ip from table\(%s\)`, name))
 }
 
 func (m MatchCriteria) NotSourceTable(name string) MatchCriteria {
-	return append(m, fmt.Sprintf("ip from not table(%s)", name))
+	return append(m, fmt.Sprintf(`ip from not table\(%s\)`, name))
 }
 
 func (m MatchCriteria) DestTable(name string) MatchCriteria {
