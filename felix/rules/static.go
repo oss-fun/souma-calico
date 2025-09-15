@@ -15,7 +15,6 @@
 package rules
 
 import (
-	"fmt"
 	"os/exec"
 
 	log "github.com/sirupsen/logrus"
@@ -215,7 +214,7 @@ func (r *DefaultRuleRenderer) filterInputChain(ipVersion uint8) *Chain {
 		ifaceMatch := prefix + "+"
 		inputRules = append(inputRules, Rule{
 			Match:  Match().InInterface(ifaceMatch),
-			Action: SkiptoAction{Target: ChainWorkloadToHost},
+			Action: SkiptoAction{Target: ChainFilterWorkloadToHost},
 		})
 	}
 
@@ -230,7 +229,7 @@ func (r *DefaultRuleRenderer) filterInputChain(ipVersion uint8) *Chain {
 			Action: UntagAction{TagNumber: r.allCalicoTagNum()},
 		},
 		Rule{
-			Action: CallAction{Target: ChainDispatchFromHostEndpoint},
+			Action: CallAction{Target: ChainFilterDispatchFromHostEndpoint},
 		},
 		Rule{
 			Match:   Match().Tagged(r.IpfwTagAccept),
@@ -331,7 +330,7 @@ func (r *DefaultRuleRenderer) filterWorkloadToHostChain(ipVersion uint8) *Chain 
 
 	// Now send traffic to the policy chains to apply the egress policy.
 	rules = append(rules, Rule{
-		Action: CallAction{Target: ChainFromWorkloadDispatch},
+		Action: CallAction{Target: ChainFilterFromWorkloadDispatch},
 	})
 
 	// If the dispatch chain accepts the packet, it returns to us here.  Apply the configured
@@ -346,7 +345,7 @@ func (r *DefaultRuleRenderer) filterWorkloadToHostChain(ipVersion uint8) *Chain 
 	}
 
 	result := &Chain{
-		Name:  ChainWorkloadToHost,
+		Name:  ChainFilterWorkloadToHost,
 		Rules: rules,
 	}
 	if err := result.Organize(); err != nil {
@@ -416,8 +415,20 @@ func (r *DefaultRuleRenderer) failsafeInChain(table string, ipVersion uint8) *Ch
 		}
 	}
 
+	var cn string
+	switch table {
+	case "filter":
+		cn = ChainFilterFailsafeIn
+	case "mangle":
+		cn = ChainMangleFailsafeIn
+	case "raw":
+		cn = ChainRawFailsafeIn
+	default:
+		log.Panicf("failsafeInChain failed: No such Table: %s", table)
+	}
+
 	result := &Chain{
-		Name:  ChainFailsafeIn,
+		Name:  cn,
 		Rules: rules,
 	}
 	if err := result.Organize(); err != nil {
@@ -487,8 +498,20 @@ func (r *DefaultRuleRenderer) failsafeOutChain(table string, ipVersion uint8) *C
 		}
 	}
 
+	var cn string
+	switch table {
+	case "filter":
+		cn = ChainFilterFailsafeOut
+	case "mangle":
+		cn = ChainMangleFailsafeOut
+	case "raw":
+		cn = ChainRawFailsafeOut
+	default:
+		log.Panicf("failsafeOutChain failed: No such Table: %s", table)
+	}
+
 	result := &Chain{
-		Name:  ChainFailsafeOut,
+		Name:  cn,
 		Rules: rules,
 	}
 	if err := result.Organize(); err != nil {
@@ -520,7 +543,7 @@ func (r *DefaultRuleRenderer) StaticFilterForwardChains() []*Chain {
 			// Apply forward policy for the incoming Host endpoint if accept bit is clear which means the packet
 			// was not accepted in a previous raw or pre-DNAT chain.
 			Match:  Match().Tagged(r.IpfwTagAccept),
-			Action: CallAction{Target: ChainDispatchFromHostEndPointForward},
+			Action: CallAction{Target: ChainFilterDispatchFromHostEndPointForward},
 		},
 	)
 
@@ -531,11 +554,11 @@ func (r *DefaultRuleRenderer) StaticFilterForwardChains() []*Chain {
 		rules = append(rules,
 			Rule{
 				Match:  Match().InInterface(ifaceMatch),
-				Action: CallAction{Target: ChainFromWorkloadDispatch},
+				Action: CallAction{Target: ChainFilterFromWorkloadDispatch},
 			},
 			Rule{
 				Match:  Match().OutInterface(ifaceMatch),
-				Action: CallAction{Target: ChainToWorkloadDispatch},
+				Action: CallAction{Target: ChainFilterToWorkloadDispatch},
 			},
 		)
 	}
@@ -544,14 +567,14 @@ func (r *DefaultRuleRenderer) StaticFilterForwardChains() []*Chain {
 	rules = append(rules,
 		Rule{
 			// Apply forward policy for the outgoing host endpoint.
-			Action: CallAction{Target: ChainDispatchToHostEndpointForward},
+			Action: CallAction{Target: ChainFilterDispatchToHostEndpointForward},
 		},
 	)
 
 	// Jump to chain for blocking service CIDR loops.
 	rules = append(rules,
 		Rule{
-			Action: CallAction{Target: ChainCIDRBlock},
+			Action: CallAction{Target: ChainFilterCIDRBlock},
 		},
 	)
 
@@ -632,7 +655,7 @@ func (r *DefaultRuleRenderer) filterOutputChain(ipVersion uint8) *Chain {
 		},
 		Rule{
 			Match:  Match(),
-			Action: CallAction{Target: ChainDispatchToHostEndpoint},
+			Action: CallAction{Target: ChainFilterDispatchToHostEndpoint},
 		},
 		Rule{
 			Match:   Match().Tagged(r.IpfwTagAccept),
@@ -740,7 +763,7 @@ func (r *DefaultRuleRenderer) StaticManglePreroutingChain(ipVersion uint8) *Chai
 	// Now dispatch to host endpoint chain for the incoming interface.
 	rules = append(rules,
 		Rule{
-			Action: CallAction{Target: ChainDispatchFromHostEndpoint},
+			Action: CallAction{Target: ChainMangleDispatchFromHostEndpoint},
 		},
 		// Following that...  If the packet was explicitly allowed by a pre-DNAT policy, it
 		// will have MarkAccept set.  If the packet was denied, it will have been dropped
@@ -807,7 +830,7 @@ func (r *DefaultRuleRenderer) StaticManglePostroutingChain(ipVersion uint8) *Cha
 		},
 		Rule{
 			Match:  Match().ConntrackState("established"), // DNAT
-			Action: CallAction{Target: ChainDispatchToHostEndpoint},
+			Action: CallAction{Target: ChainMangleDispatchToHostEndpoint},
 		},
 		Rule{
 			Match:   Match().Tagged(r.IpfwTagAccept),
@@ -857,13 +880,13 @@ func (r *DefaultRuleRenderer) StaticRawPreroutingChain(ipVersion uint8) *Chain {
 	rules = append(rules,
 		Rule{
 			Match:  Match().Tagged(tagFromWorkload),
-			Action: CallAction{Target: ChainRpfSkip},
+			Action: CallAction{Target: ChainRawRpfSkip},
 		})
 
 	rules = append(rules,
 		// Send non-workload traffic to the untracked policy chains.
 		Rule{Match: Match().NotTagged(tagFromWorkload),
-			Action: CallAction{Target: ChainDispatchFromHostEndpoint}},
+			Action: CallAction{Target: ChainRawDispatchFromHostEndpoint}},
 		// Then, if the packet was marked as allowed, accept it.  Packets also return here
 		// without the mark bit set if the interface wasn't one that we're policing.  We
 		// let those packets fall through to the user's policy.
@@ -886,39 +909,6 @@ func (r *DefaultRuleRenderer) allCalicoTagNum() uint16 {
 		r.IpfwTagPass |
 		r.IpfwTagScratch0 |
 		r.IpfwTagScratch1
-}
-
-func (r *DefaultRuleRenderer) WireguardIncomingTagChain() *Chain {
-	rules := []Rule{
-		{
-			Match:  Match().InInterface("lo"),
-			Action: ReturnAction{},
-		},
-		{
-			Match:  Match().InInterface(r.WireguardInterfaceName),
-			Action: ReturnAction{},
-		},
-		{
-			Match:  Match().InInterface(r.WireguardInterfaceNameV6),
-			Action: ReturnAction{},
-		},
-	}
-
-	for _, ifacePrefix := range r.WorkloadIfacePrefixes {
-		rules = append(rules, Rule{
-			Match:  Match().InInterface(fmt.Sprintf("%s+", ifacePrefix)),
-			Action: ReturnAction{},
-		})
-	}
-
-	result := &Chain{
-		Name:  ChainSetWireguardIncomingMark,
-		Rules: rules,
-	}
-	if err := result.Organize(); err != nil {
-		log.WithField("err", err).Panic("Failed WireguardIncomingTagChain result Organize")
-	}
-	return result
 }
 
 func (r *DefaultRuleRenderer) StaticRawOutputChain(tcBypassTag uint16) *Chain {
