@@ -917,7 +917,7 @@ func (r *DefaultRuleRenderer) StaticRawOutputChain(tcBypassTag uint16) *Chain {
 		// append mode and another process' rules could have left the mark bit set.)
 		{Action: UntagAction{TagNumber: r.allCalicoTagNum()}},
 		// Then, jump to the untracked policy chains.
-		{Action: CallAction{Target: ChainDispatchToHostEndpoint}},
+		{Action: CallAction{Target: ChainRawDispatchToHostEndpoint}},
 		// Then, if the packet was marked as allowed, accept it.  Packets also
 		// return here without the mark bit set if the interface wasn't one that
 		// we're policing.

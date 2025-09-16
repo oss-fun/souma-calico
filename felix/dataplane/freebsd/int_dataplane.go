@@ -892,7 +892,7 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 	for _, t := range d.ipfwRawRuleSet {
 		rawChains := d.ruleRenderer.StaticRawTableChains(t.IPVersion)
 		t.UpdateChains(rawChains)
-		t.InsertOrAppendRules("RAW-PREROUTING", []ipfw.Rule{
+		t.InsertOrAppendRules("R-PREROUTING", []ipfw.Rule{
 			{
 				Number: 11,
 				Action: ipfw.CallAction{Target: rules.ChainRawPrerouting},
@@ -902,7 +902,7 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 				Action: ipfw.CallAction{Target: rules.ChainRawPrerouting},
 			},
 		})
-		t.InsertOrAppendRules("RAW-OUTPUT", []ipfw.Rule{{
+		t.InsertOrAppendRules("R-OUTPUT", []ipfw.Rule{{
 			Number: 21,
 			Action: ipfw.CallAction{Target: rules.ChainRawOutput},
 		}})

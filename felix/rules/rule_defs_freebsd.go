@@ -16,6 +16,7 @@ package rules
 
 import (
 	"net"
+	"strings"
 
 	log "github.com/sirupsen/logrus"
 
@@ -93,6 +94,7 @@ const (
 	ChainDispatchToHostEndpoint                = ChainNamePrefix + "to-host-endpoint"
 	ChainFilterDispatchToHostEndpoint          = ChainNamePrefix + "F-" + "to-host-endpoint"
 	ChainMangleDispatchToHostEndpoint          = ChainNamePrefix + "M-" + "to-host-endpoint"
+	ChainRawDispatchToHostEndpoint             = ChainNamePrefix + "R-" + "to-host-endpoint"
 	ChainDispatchFromHostEndpoint              = ChainNamePrefix + "from-host-endpoint"
 	ChainFilterDispatchFromHostEndpoint        = ChainNamePrefix + "F-" + "from-host-endpoint"
 	ChainMangleDispatchFromHostEndpoint        = ChainNamePrefix + "M-" + "from-host-endpoint"
@@ -206,21 +208,30 @@ type RuleRenderer interface {
 	StaticMangleTableChains(ipVersion uint8) []*ipfw.Chain
 	StaticFilterForwardAppendRules() []ipfw.Rule
 
-	WorkloadDispatchChains(map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint) []*ipfw.Chain
-	WorkloadEndpointToIpfwChains(ifaceName string, epTagMapper EndpointTagMapper, adminUp bool, ingressPolicies []*PolicyGroup, egressPolicies []*PolicyGroup, profileIDs []string) []*ipfw.Chain
+	WorkloadDispatchChains(string, map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint) []*ipfw.Chain
+	WorkloadEndpointToIpfwChains(
+		table string,
+		ifaceName string,
+		epTagMapper EndpointTagMapper,
+		adminUp bool,
+		ingressPolicies []*PolicyGroup,
+		egressPolicies []*PolicyGroup,
+		profileIDs []string,
+	) []*ipfw.Chain
 	PolicyGroupToIpfwChains(group *PolicyGroup) []*ipfw.Chain
 
-	WorkloadInterfaceAllowChains(endpoints map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint) []*ipfw.Chain
+	WorkloadInterfaceAllowChains(table string, endpoints map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint) []*ipfw.Chain
 
 	EndpointTagDispatchChains(
+		table string,
 		epTagMapper EndpointTagMapper,
 		wlEndpoints map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint,
 		hepEndpoints map[string]proto.HostEndpointID,
 	) []*ipfw.Chain
 
-	HostDispatchChains(map[string]proto.HostEndpointID, string, bool) []*ipfw.Chain
-	FromHostDispatchChains(map[string]proto.HostEndpointID, string) []*ipfw.Chain
-	ToHostDispatchChains(map[string]proto.HostEndpointID, string) []*ipfw.Chain
+	HostDispatchChains(string, map[string]proto.HostEndpointID, string, bool) []*ipfw.Chain
+	FromHostDispatchChains(string, map[string]proto.HostEndpointID, string) []*ipfw.Chain
+	ToHostDispatchChains(string, map[string]proto.HostEndpointID, string) []*ipfw.Chain
 	HostEndpointToFilterChains(
 		ifaceName string,
 		epTagMapper EndpointTagMapper,
@@ -407,4 +418,28 @@ func NewRenderer(config Config) RuleRenderer {
 		blockCIDRAction:      blockCIDRAction,
 		ipfwFilterDenyAction: ipfwFilterDenyAction,
 	}
+}
+
+// TODO: テーブル名付与用関数
+func AddTableNameToChainName(table, chainName string) string {
+	var prefix string
+	switch table {
+	case "filter":
+		prefix = "F-"
+	case "nat":
+		prefix = "N-"
+	case "mangle":
+		prefix = "M-"
+	case "raw":
+		prefix = "R-"
+	default:
+		return chainName
+	}
+
+	pos := strings.Index(chainName, ChainNamePrefix)
+	if pos == -1 {
+		return chainName
+	}
+	insertPos := pos + len(ChainNamePrefix)
+	return chainName[:insertPos] + prefix + chainName[insertPos:]
 }

@@ -25,6 +25,7 @@ import (
 )
 
 func (r *DefaultRuleRenderer) WorkloadDispatchChains(
+	table string,
 	endpoints map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint,
 ) []*Chain {
 	// Extract endpoint names.
@@ -44,6 +45,7 @@ func (r *DefaultRuleRenderer) WorkloadDispatchChains(
 		},
 	}
 	return r.interfaceNameDispatchChains(
+		table,
 		names,
 		WorkloadFromEndpointPfx,
 		WorkloadToEndpointPfx,
@@ -55,6 +57,7 @@ func (r *DefaultRuleRenderer) WorkloadDispatchChains(
 }
 
 func (r *DefaultRuleRenderer) WorkloadInterfaceAllowChains(
+	table string,
 	endpoints map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint,
 ) []*Chain {
 	// Extract endpoint names.
@@ -80,6 +83,7 @@ func (r *DefaultRuleRenderer) WorkloadInterfaceAllowChains(
 	var chains []*Chain
 	// Build to endpoint chains.
 	toChildChains, toRootChain, _ := r.buildSingleDispatchChains(
+		table,
 		ChainToWorkloadDispatch,
 		commonPrefix,
 		prefixes,
@@ -102,6 +106,7 @@ func (r *DefaultRuleRenderer) WorkloadInterfaceAllowChains(
 // Assemble a set-endpoint-tag chain to set the endpoint tag matching on the incoming workload/host interface and
 // a from-endpoint-tag chain to jump to a corresponding endpoint chain matching on its endpoint tag.
 func (r *DefaultRuleRenderer) EndpointTagDispatchChains(
+	table string,
 	epTagMapper EndpointTagMapper,
 	wlEndpoints map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint,
 	hepEndpoints map[string]proto.HostEndpointID,
@@ -122,6 +127,7 @@ func (r *DefaultRuleRenderer) EndpointTagDispatchChains(
 	}
 
 	return r.endpointTagDispatchChains(
+		table,
 		wlNames,
 		hepNames,
 		epTagMapper,
@@ -134,30 +140,34 @@ func (r *DefaultRuleRenderer) EndpointTagDispatchChains(
 }
 
 func (r *DefaultRuleRenderer) HostDispatchChains(
+	table string,
 	endpoints map[string]proto.HostEndpointID,
 	defaultIfaceName string,
 	applyOnForward bool,
 ) []*Chain {
-	return r.hostDispatchChains(endpoints, defaultIfaceName, "to+from", applyOnForward)
+	return r.hostDispatchChains(table, endpoints, defaultIfaceName, "to+from", applyOnForward)
 }
 
 // For pre-DNAT policy, which only applies on ingress from a host endpoint.
 func (r *DefaultRuleRenderer) FromHostDispatchChains(
+	table string,
 	endpoints map[string]proto.HostEndpointID,
 	defaultIfaceName string,
 ) []*Chain {
-	return r.hostDispatchChains(endpoints, defaultIfaceName, "from", false)
+	return r.hostDispatchChains(table, endpoints, defaultIfaceName, "from", false)
 }
 
 // For applying normal host endpoint egress policy to traffic from the host which has been DNAT'd.
 func (r *DefaultRuleRenderer) ToHostDispatchChains(
+	table string,
 	endpoints map[string]proto.HostEndpointID,
 	defaultIfaceName string,
 ) []*Chain {
-	return r.hostDispatchChains(endpoints, defaultIfaceName, "to", false)
+	return r.hostDispatchChains(table, endpoints, defaultIfaceName, "to", false)
 }
 
 func (r *DefaultRuleRenderer) hostDispatchChains(
+	table string,
 	endpoints map[string]proto.HostEndpointID,
 	defaultIfaceName string,
 	directions string,
@@ -177,12 +187,12 @@ func (r *DefaultRuleRenderer) hostDispatchChains(
 		// interface in the `endpoints` map.
 		fromEndRules = []Rule{
 			Rule{
-				Action: SkiptoAction{Target: EndpointChainName(HostFromEndpointPfx, defaultIfaceName)},
+				Action: SkiptoAction{Target: EndpointChainName(table, HostFromEndpointPfx, defaultIfaceName)},
 			},
 		}
 		fromEndForwardRules = []Rule{
 			Rule{
-				Action: SkiptoAction{Target: EndpointChainName(HostFromEndpointForwardPfx, defaultIfaceName)},
+				Action: SkiptoAction{Target: EndpointChainName(table, HostFromEndpointForwardPfx, defaultIfaceName)},
 			},
 		}
 
@@ -202,17 +212,18 @@ func (r *DefaultRuleRenderer) hostDispatchChains(
 		}
 
 		toEndRules = append(toEndRules, Rule{
-			Action: SkiptoAction{Target: EndpointChainName(HostToEndpointPfx, defaultIfaceName)},
+			Action: SkiptoAction{Target: EndpointChainName(table, HostToEndpointPfx, defaultIfaceName)},
 		})
 		toEndForwardRules = []Rule{
 			Rule{
-				Action: SkiptoAction{Target: EndpointChainName(HostToEndpointForwardPfx, defaultIfaceName)},
+				Action: SkiptoAction{Target: EndpointChainName(table, HostToEndpointForwardPfx, defaultIfaceName)},
 			},
 		}
 	}
 
 	if directions == "from" {
 		return r.interfaceNameDispatchChains(
+			table,
 			names,
 			HostFromEndpointPfx,
 			"",
@@ -225,6 +236,7 @@ func (r *DefaultRuleRenderer) hostDispatchChains(
 
 	if directions == "to" {
 		return r.interfaceNameDispatchChains(
+			table,
 			names,
 			"",
 			HostToEndpointPfx,
@@ -237,6 +249,7 @@ func (r *DefaultRuleRenderer) hostDispatchChains(
 
 	if !applyOnForward {
 		return r.interfaceNameDispatchChains(
+			table,
 			names,
 			HostFromEndpointPfx,
 			HostToEndpointPfx,
@@ -249,6 +262,7 @@ func (r *DefaultRuleRenderer) hostDispatchChains(
 
 	return append(
 		r.interfaceNameDispatchChains(
+			table,
 			names,
 			HostFromEndpointPfx,
 			HostToEndpointPfx,
@@ -258,6 +272,7 @@ func (r *DefaultRuleRenderer) hostDispatchChains(
 			toEndRules,
 		),
 		r.interfaceNameDispatchChains(
+			table,
 			names,
 			HostFromEndpointForwardPfx,
 			HostToEndpointForwardPfx,
@@ -270,6 +285,7 @@ func (r *DefaultRuleRenderer) hostDispatchChains(
 }
 
 func (r *DefaultRuleRenderer) interfaceNameDispatchChains(
+	table string,
 	names []string,
 	fromEndpointPfx,
 	toEndpointPfx,
@@ -289,6 +305,7 @@ func (r *DefaultRuleRenderer) interfaceNameDispatchChains(
 	if fromEndpointPfx != "" {
 		// Build from endpoint chains.
 		fromChildChains, fromRootChain, _ := r.buildSingleDispatchChains(
+			table,
 			dispatchFromEndpointChainName,
 			commonPrefix,
 			prefixes,
@@ -297,7 +314,7 @@ func (r *DefaultRuleRenderer) interfaceNameDispatchChains(
 			func(name string) MatchCriteria { return Match().InInterface(name) },
 			func(pfx, name string) Action {
 				return SkiptoAction{
-					Target: EndpointChainName(pfx, name),
+					Target: EndpointChainName(table, pfx, name),
 				}
 			},
 			fromEndRules,
@@ -309,6 +326,7 @@ func (r *DefaultRuleRenderer) interfaceNameDispatchChains(
 	if toEndpointPfx != "" {
 		// Build to endpoint chains.
 		toChildChains, toRootChain, _ := r.buildSingleDispatchChains(
+			table,
 			dispatchToEndpointChainName,
 			commonPrefix,
 			prefixes,
@@ -317,7 +335,7 @@ func (r *DefaultRuleRenderer) interfaceNameDispatchChains(
 			func(name string) MatchCriteria { return Match().OutInterface(name) },
 			func(pfx, name string) Action {
 				return SkiptoAction{
-					Target: EndpointChainName(pfx, name),
+					Target: EndpointChainName(table, pfx, name),
 				}
 			},
 			toEndRules,
@@ -330,6 +348,7 @@ func (r *DefaultRuleRenderer) interfaceNameDispatchChains(
 }
 
 func (r *DefaultRuleRenderer) endpointTagDispatchChains(
+	table string,
 	wlNames []string,
 	hepNames []string,
 	epTagMapper EndpointTagMapper,
@@ -357,6 +376,7 @@ func (r *DefaultRuleRenderer) endpointTagDispatchChains(
 			commonPrefix, prefixes, prefixToNames := r.sortAndDivideEndpointNamesToPrefixTree(names)
 
 			childChains, _, rootRules := r.buildSingleDispatchChains(
+				table,
 				dispatchSetTagEndpointChainName,
 				commonPrefix,
 				prefixes,
@@ -365,7 +385,7 @@ func (r *DefaultRuleRenderer) endpointTagDispatchChains(
 				func(name string) MatchCriteria { return Match().InInterface(name) },
 				func(pfx, name string) Action {
 					return SkiptoAction{
-						Target: EndpointChainName(pfx, name),
+						Target: EndpointChainName(table, pfx, name),
 					}
 				},
 				nil,
@@ -418,7 +438,7 @@ func (r *DefaultRuleRenderer) endpointTagDispatchChains(
 				rootFromTagRules = append(rootFromTagRules, Rule{
 					Match: Match().Tagged(endPointTag),
 					Action: SkiptoAction{
-						Target: EndpointChainName(fromTagPrefixes[index], name),
+						Target: EndpointChainName(table, fromTagPrefixes[index], name),
 					},
 				})
 			}
@@ -457,6 +477,7 @@ func (r *DefaultRuleRenderer) endpointTagDispatchChains(
 // Build a single dispatch chains for an endpoint based on prefixes.
 // Return child chains, root chain and root rules of root chain.
 func (r *DefaultRuleRenderer) buildSingleDispatchChains(
+	table string,
 	chainName string,
 	commonPrefix string,
 	prefixes []string,

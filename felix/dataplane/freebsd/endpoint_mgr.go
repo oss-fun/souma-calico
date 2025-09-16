@@ -802,7 +802,7 @@ func (m *endpointManager) resolveWorkloadEndpoints() {
 
 	if m.needToCheckDispatchChains {
 		// Rewrite the dispatch chains if they've changed.
-		newDispatchChains := m.ruleRenderer.WorkloadDispatchChains(m.activeWlEndpoints)
+		newDispatchChains := m.ruleRenderer.WorkloadDispatchChains("filter", m.activeWlEndpoints)
 		m.updateDispatchChains(m.activeWlDispatchChains, newDispatchChains, m.filterRuleSet)
 		m.needToCheckDispatchChains = false
 
@@ -837,6 +837,7 @@ func (m *endpointManager) updateWorkloadEndpointChains(
 	m.updatePolicyGroups(workload.Name, append(ingressGroups, egressGroups...))
 
 	chains := m.ruleRenderer.WorkloadEndpointToIpfwChains(
+		"filter",
 		workload.Name,
 		m.epTagMapper,
 		adminUp,
@@ -887,7 +888,7 @@ func (m *endpointManager) updateRPFSkipChain() {
 
 func (m *endpointManager) resolveEndpointTags() {
 	// Render endpoint mark chains for active workload and host endpoint.
-	newEndpointTagDispatchChains := m.ruleRenderer.EndpointTagDispatchChains(m.epTagMapper, m.activeWlEndpoints, m.activeIfaceNameToHostEpID)
+	newEndpointTagDispatchChains := m.ruleRenderer.EndpointTagDispatchChains("filter", m.epTagMapper, m.activeWlEndpoints, m.activeIfaceNameToHostEpID)
 	m.updateDispatchChains(m.activeEPTagDispatchChains, newEndpointTagDispatchChains, m.filterRuleSet)
 }
 
@@ -1227,7 +1228,7 @@ func (m *endpointManager) updateHostEndpoints() {
 	// egress policy even in BPF mode.
 	log.WithField("resolvedHostEpIds", newUntrackedIfaceNameToHostEpID).Debug("Rewrite raw dispatch chains?")
 	var newRawDispatchChains []*ipfw.Chain
-	newRawDispatchChains = m.ruleRenderer.HostDispatchChains(newUntrackedIfaceNameToHostEpID, "", false)
+	newRawDispatchChains = m.ruleRenderer.HostDispatchChains("raw", newUntrackedIfaceNameToHostEpID, "", false)
 	m.updateDispatchChains(m.activeHostRawDispatchChains, newRawDispatchChains, m.rawRuleSet)
 
 	// Rewrite the filter dispatch chains if they've changed.
@@ -1240,8 +1241,8 @@ func (m *endpointManager) updateHostEndpoints() {
 		defaultIfaceName = allInterfaces
 		delete(newIfaceNameToHostEpID, allInterfaces)
 	}
-	newFilterDispatchChains := m.ruleRenderer.HostDispatchChains(newIfaceNameToHostEpID, defaultIfaceName, true)
-	newMangleEgressDispatchChains := m.ruleRenderer.ToHostDispatchChains(newIfaceNameToHostEpID, defaultIfaceName)
+	newFilterDispatchChains := m.ruleRenderer.HostDispatchChains("filter", newIfaceNameToHostEpID, defaultIfaceName, true)
+	newMangleEgressDispatchChains := m.ruleRenderer.ToHostDispatchChains("mangle", newIfaceNameToHostEpID, defaultIfaceName)
 	m.updateDispatchChains(m.activeHostFilterDispatchChains, newFilterDispatchChains, m.filterRuleSet)
 	// Set flag to update endpoint mark chains.
 	m.needToCheckEndpointTagChains = true
@@ -1255,7 +1256,7 @@ func (m *endpointManager) updateHostEndpoints() {
 		defaultIfaceName = allInterfaces
 		delete(newPreDNATIfaceNameToHostEpID, allInterfaces)
 	}
-	newMangleIngressDispatchChains := m.ruleRenderer.FromHostDispatchChains(newPreDNATIfaceNameToHostEpID, defaultIfaceName)
+	newMangleIngressDispatchChains := m.ruleRenderer.FromHostDispatchChains("mangle", newPreDNATIfaceNameToHostEpID, defaultIfaceName)
 	newMangleDispatchChains := append(newMangleIngressDispatchChains, newMangleEgressDispatchChains...)
 	m.updateDispatchChains(m.activeHostMangleDispatchChains, newMangleDispatchChains, m.mangleRuleSet)
 

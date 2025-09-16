@@ -200,11 +200,9 @@ func (c *Chain) Organize() error {
 	}
 	c.Number = start
 
-	// rulesの先頭にChain名のコメント行を入れる
 	createChainRule := []Rule {
 		{
 			Action: CountAction{},
-			//Comment: []string{fmt.Sprintf("chainName: %s", c.Name)},
 		},
 	}
 	c.Rules = append(createChainRule, c.Rules...)
@@ -213,6 +211,13 @@ func (c *Chain) Organize() error {
 	for i, _ := range c.Rules {
 		c.Rules[i].Number = c.Number + uint16(i)
 	}
+
+	endRule := Rule {
+		Number: c.Number + RULE_BUF -1,
+		Action: ReturnAction{},
+	}
+
+	c.Rules = append(c.Rules, endRule)
 
 	_, ok := ChainNameToChain[c.Name]
 	if !ok {
@@ -223,7 +228,7 @@ func (c *Chain) Organize() error {
 }
 
 const (
-	RULE_BUF = 10
+	RULE_BUF = 100
 )
 
 // chain番号の生成

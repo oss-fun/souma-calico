@@ -34,6 +34,7 @@ const (
 )
 
 func (r *DefaultRuleRenderer) WorkloadEndpointToIpfwChains(
+	table string,
 	ifaceName string,
 	epMarkMapper EndpointTagMapper,
 	adminUp bool,
@@ -47,6 +48,7 @@ func (r *DefaultRuleRenderer) WorkloadEndpointToIpfwChains(
 	result = append(result,
 		// Chain for traffic _to_ the endpoint.
 		r.endpointIpfwChain(
+			table,
 			ingressPolicies,
 			profileIDs,
 			ifaceName,
@@ -64,6 +66,7 @@ func (r *DefaultRuleRenderer) WorkloadEndpointToIpfwChains(
 		// Encap traffic is blocked by default from workload endpoints
 		// unless explicitly overridden.
 		r.endpointIpfwChain(
+			table,
 			egressPolicies,
 			profileIDs,
 			ifaceName,
@@ -96,6 +99,7 @@ func (r *DefaultRuleRenderer) HostEndpointToFilterChains(
 	result = append(result,
 		// Chain for output traffic _to_ the endpoint.
 		r.endpointIpfwChain(
+			"filter",
 			egressPolicies,
 			profileIDs,
 			ifaceName,
@@ -111,6 +115,7 @@ func (r *DefaultRuleRenderer) HostEndpointToFilterChains(
 		),
 		// Chain for input traffic _from_ the endpoint.
 		r.endpointIpfwChain(
+			"filter",
 			ingressPolicies,
 			profileIDs,
 			ifaceName,
@@ -126,6 +131,7 @@ func (r *DefaultRuleRenderer) HostEndpointToFilterChains(
 		),
 		// Chain for forward traffic _to_ the endpoint.
 		r.endpointIpfwChain(
+			"filter",
 			egressForwardPolicies,
 			profileIDs,
 			ifaceName,
@@ -141,6 +147,7 @@ func (r *DefaultRuleRenderer) HostEndpointToFilterChains(
 		),
 		// Chain for forward traffic _from_ the endpoint.
 		r.endpointIpfwChain(
+			"filter",
 			ingressForwardPolicies,
 			profileIDs,
 			ifaceName,
@@ -170,6 +177,7 @@ func (r *DefaultRuleRenderer) HostEndpointToMangleEgressChains(
 		// ACCEPT because the mangle table is typically used, if at all, for packet
 		// manipulations that might need to apply to our allowed traffic.
 		r.endpointIpfwChain(
+			"mangle",
 			egressPolicies,
 			profileIDs,
 			ifaceName,
@@ -192,6 +200,7 @@ func (r *DefaultRuleRenderer) HostEndpointToRawEgressChain(
 ) *Chain {
 	log.WithField("ifaceName", ifaceName).Debug("Rendering raw (untracked) host endpoint egress chain.")
 	return r.endpointIpfwChain(
+		"raw",
 		egressPolicies,
 		nil, // We don't render profiles into the raw table.
 		ifaceName,
@@ -218,6 +227,7 @@ func (r *DefaultRuleRenderer) HostEndpointToRawChains(
 		r.HostEndpointToRawEgressChain(ifaceName, egressPolicies),
 		// Chain for traffic _from_ the endpoint.
 		r.endpointIpfwChain(
+			"raw",
 			ingressPolicies,
 			nil, // We don't render profiles into the raw table.
 			ifaceName,
@@ -243,6 +253,7 @@ func (r *DefaultRuleRenderer) HostEndpointToMangleIngressChains(
 		// Chain for traffic _from_ the endpoint.  Pre-DNAT policy does not apply to
 		// outgoing traffic through a host endpoint.
 		r.endpointIpfwChain(
+			"mangle",
 			preDNATPolicies,
 			nil, // We don't render profiles into the raw table.
 			ifaceName,
@@ -269,12 +280,13 @@ const (
 )
 
 func (r *DefaultRuleRenderer) endpointSetTagChain(
+	table string,
 	name string,
 	epTagMapper EndpointTagMapper,
 	endpointPrefix string,
 ) *Chain {
 	rules := []Rule{}
-	chainName := EndpointChainName(endpointPrefix, name)
+	chainName := EndpointChainName(table, endpointPrefix, name)
 
 	if endPointTag, err := epTagMapper.GetEndpointTag(name); err == nil {
 		// Set endpoint mark.
@@ -349,9 +361,23 @@ func (r *DefaultRuleRenderer) PolicyGroupToIpfwChains(group *PolicyGroup) []*Cha
 	return results
 }
 
-func (r *DefaultRuleRenderer) endpointIpfwChain(policyGroups []*PolicyGroup, profileIds []string, name string, policyPrefix PolicyChainNamePrefix, profilePrefix ProfileChainNamePrefix, endpointPrefix string, failsafeChain string, chainType endpointChainType, adminUp bool, allowAction Action, allowVXLANEncap bool, allowIPIPEncap bool) *Chain {
+func (r *DefaultRuleRenderer) endpointIpfwChain(
+	table string,
+	policyGroups []*PolicyGroup,
+	profileIds []string,
+	name string,
+	policyPrefix PolicyChainNamePrefix,
+	profilePrefix ProfileChainNamePrefix,
+	endpointPrefix string,
+	failsafeChain string,
+	chainType endpointChainType,
+	adminUp bool,
+	allowAction Action,
+	allowVXLANEncap bool,
+	allowIPIPEncap bool,
+) *Chain {
 	rules := []Rule{}
-	chainName := EndpointChainName(endpointPrefix, name)
+	chainName := EndpointChainName(table, endpointPrefix, name)
 
 	if !adminUp {
 		// Endpoint is admin-down, drop all traffic to/from it.
@@ -528,12 +554,15 @@ func (r *DefaultRuleRenderer) appendConntrackRules(rules []Rule, allowAction Act
 	return rules
 }
 
-func EndpointChainName(prefix string, ifaceName string) string {
-	return hashutils.GetLengthLimitedID(
+// TODO: table追加
+func EndpointChainName(table string, prefix string, ifaceName string) string {
+	result := hashutils.GetLengthLimitedID(
 		prefix,
 		ifaceName,
 		MaxChainNameLength,
 	)
+	result = AddTableNameToChainName(table, result)
+	return result
 }
 
 // MaxPolicyGroupUIDLength is sized for UIDs to fit into their chain names.
