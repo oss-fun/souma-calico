@@ -910,10 +910,12 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 	for _, t := range d.ipfwFilterRuleSet {
 		filterChains := d.ruleRenderer.StaticFilterTableChains(t.IPVersion)
 		t.UpdateChains(filterChains)
-		t.InsertOrAppendRules("F-FORWARD", []ipfw.Rule{{
+		ffRule := []ipfw.Rule{{
 			Number: 34,
 			Action: ipfw.CallAction{Target: rules.ChainFilterForward},
-		}})
+		}}
+		ffRule = append(ffRule, d.ruleRenderer.StaticFilterForwardAppendRules()...)
+		t.InsertOrAppendRules("F-FORWARD", ffRule)
 		t.InsertOrAppendRules("F-INPUT", []ipfw.Rule{{
 			Number: 14,
 			Action: ipfw.CallAction{Target: rules.ChainFilterInput},
@@ -922,8 +924,6 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 			Number: 23,
 			Action: ipfw.CallAction{Target: rules.ChainFilterOutput},
 		}})
-
-		t.AppendRules("F-FORWARD", d.ruleRenderer.StaticFilterForwardAppendRules())
 	}
 	for _, t := range d.ipfwNATRuleSet {
 		t.UpdateChains(d.ruleRenderer.StaticNATTableChains(t.IPVersion))
@@ -943,7 +943,7 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 				Action: ipfw.CallAction{Target: rules.ChainNATPostrouting},
 			},
 			{
-				Number: 36,
+				Number: 38,
 				Action: ipfw.CallAction{Target: rules.ChainNATPostrouting},
 			},
 		})
@@ -970,7 +970,7 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 				Action: ipfw.CallAction{Target: rules.ChainManglePostrouting},
 			},
 			{
-				Number: 35,
+				Number: 37,
 				Action: ipfw.CallAction{Target: rules.ChainManglePostrouting},
 			},
 		})

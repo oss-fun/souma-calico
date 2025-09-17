@@ -595,6 +595,7 @@ func (r *DefaultRuleRenderer) StaticFilterForwardChains() []*Chain {
 func (r *DefaultRuleRenderer) StaticFilterForwardAppendRules() []Rule {
 	return []Rule{
 		{
+			Number:  35,
 			Match:   Match().Tagged(r.IpfwTagAccept),
 			Action:  r.filterAllowAction,
 			Comment: []string{},
@@ -603,6 +604,7 @@ func (r *DefaultRuleRenderer) StaticFilterForwardAppendRules() []Rule {
 		// Set IpfwTagAccept bit here, to indicate to our mangle-POSTROUTING chain that this is
 		// forwarded traffic and should not be subject to normal host endpoint policy.
 		{
+			Number: 36,
 			Action: TagAction{TagNumber: r.IpfwTagAccept},
 		},
 	}

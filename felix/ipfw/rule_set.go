@@ -15,7 +15,7 @@ import (
 	"time"
 	"io"
 
-	"github.com/google/go-cmp/cmp"
+	//"github.com/google/go-cmp/cmp"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 
@@ -207,7 +207,7 @@ func NewRuleSet(
 
 	var insertMode string
 	switch options.InsertMode {
-		case "", "insert":
+	case "", "insert":
 		insertMode = "insert"
 	case "append":
 		insertMode = "append"
@@ -516,9 +516,13 @@ func (t *RuleSet) loadDataplaneState() {
 				chainName,
 				numEmptyStrings(dpHashes),
 			)
-			if diff := cmp.Diff(expectedHashes, dpHashes); diff != "" {
-				fmt.Printf("[souma-log] mismatch (-expected +got):\n%s", diff)
-			}
+			//if diff := cmp.Diff(expectedHashes, dpHashes); diff != "" {
+			//	fmt.Printf("[souma-log] len(diff)=%d\n", len(diff))
+			//	fmt.Printf("[souma-log] as-v = %v\n", diff)
+			//	fmt.Printf("[souma-log] as-s = %s\n", diff)
+			//	fmt.Printf("[souma-log] as-q = %q\n", diff)
+			//	fmt.Printf("[souma-log] mismatch (-expected +got):\n%s", diff)
+			//}
 			if !reflect.DeepEqual(dpHashes, expectedHashes) {
 				logCxt.WithFields(log.Fields{
 					"expectedRuleIDs": expectedHashes,
@@ -527,10 +531,10 @@ func (t *RuleSet) loadDataplaneState() {
 				t.dirtyInsertAppend.Add(chainName)
 			}
 		} else {
+			//if diff := cmp.Diff(expectedHashes, dpHashes); diff != "" {
+			//	fmt.Printf("[souma-log] mismatch (-expected +got):\n%s", diff)
+			//}
 			// One of our chains, should match exactly.
-			if diff := cmp.Diff(expectedHashes, dpHashes); diff != "" {
-				fmt.Printf("[souma-log] mismatch (-expected +got):\n%s", diff)
-			}
 			if !reflect.DeepEqual(dpHashes, expectedHashes) {
 				logCxt.Warn("Detected out-of-sync Calico chain, marking for resync")
 				t.dirtyChains.Add(chainName)
@@ -709,18 +713,17 @@ func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]s
 	for scanner.Scan(){
 		// 1行ずつ取得
 		line := scanner.Bytes()
-		logCxt := t.logCxt
 
 		// ルールを取得
 		// appendRegexp = "// cali:([^:]+):(.+)"
 		captures := appendRegexp.FindSubmatch(line)
 		if captures == nil {
-			logCxt.Debug("Not an append, skipping")
+			t.logCxt.Debug("Not an append, skipping")
 			continue
 		}
 		chainName := string(captures[1])
 		if !strings.Contains(chainName, tablePrefix(t.Name)) {
-			logCxt.Debug("Table hasn't Chain")
+			//logCxt.Debug("Table hasn't Chain")
 			continue
 		}
 
@@ -730,11 +733,28 @@ func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]s
 			chainHasCalicoRule.Add(chainName)
 		}
 		hashes[chainName] = append(hashes[chainName], hash)
+
+		if !t.ourChainsRegexp.MatchString(chainName) {
+			// Only store the full rule for Calico rules. Otherwise, we just use the placeholder "-".
+			fullRule := "-"
+			if captures := t.hashCommentRegexp.FindSubmatch(line); captures != nil {
+				fullRule = string(line)
+			}
+
+			rules[chainName] = append(rules[chainName], fullRule)
+		}
 	}
 	if scanner.Err() != nil {
 		log.WithError(scanner.Err()).Error("Failed to read hashes from dataplane")
 		return nil, nil, scanner.Err()
 	}
+
+	for chainName := range rules {
+		if !chainHasCalicoRule.Contains(chainName) {
+			delete(rules, chainName)
+		}
+	}
+
 
 	t.logCxt.Debugf("Read hashes from dataplane: %#v", hashes)
 	t.logCxt.Debugf("Read rules from dataplane: %#v", rules)
