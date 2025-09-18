@@ -1168,7 +1168,7 @@ func (t *RuleSet) renderDeleteByValueLine(chainName string, ruleNum int) (string
 var leadingRuleNum = regexp.MustCompile(`^\s*(\d+)`)
 
 // 先頭の数字を int で返す（ゼロ埋めは失われる）
-func extractLeadingRuleNumber(line string) (int, bool) {
+func ExtractLeadingRuleNumber(line string) (int, bool) {
 	m := leadingRuleNum.FindStringSubmatch(line)
 	if m == nil {
 		return -1, false

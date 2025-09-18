@@ -216,9 +216,8 @@ func (c *Chain) Organize() error {
 		Number: c.Number + RULE_BUF -1,
 		Action: ReturnAction{},
 	}
-
 	c.Rules = append(c.Rules, endRule)
-
+	
 	_, ok := ChainNameToChain[c.Name]
 	if !ok {
 		ChainNameToChain[c.Name] = c

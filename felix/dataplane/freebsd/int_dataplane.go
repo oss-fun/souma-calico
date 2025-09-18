@@ -17,6 +17,7 @@
 package intdataplane
 
 import (
+	"bufio"
 	"fmt"
 	"net"
 	"os"
@@ -25,8 +26,10 @@ import (
 	"regexp"
 	"sync"
 	"sync/atomic"
+	"strings"
 	"time"
 
+	"golang.org/x/exp/slices"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
@@ -881,6 +884,8 @@ func (d *InternalDataplane) doStaticDataplaneConfig() {
 
 	d.setUpIpfwNormal()
 
+	d.setUpNonRuleChains()
+
 	log.Info("IPIP disabled. Not starting tunnel update thread.")
 }
 
@@ -1051,13 +1056,6 @@ func setUpIptablesCompatible() error {
 		},
 	}
 
-	// TODO
-	//ipfw.SetChainNum("INPUT", IN_RULE)
-	//ipfw.SetChainNum("OUTPUT", OUT_RULE)
-	//ipfw.SetChainNum("FORWARD", FOR_RULE)
-	//ipfw.SetChainNum("PREROUTING", 40)
-	//ipfw.SetChainNum("POSTROUTING", 50)
-
 	if err := ipfw.RulesToRestoreFile(firstRule, RESTORE_FILE); err != nil {
 		return fmt.Errorf("RulesToRestoreFile failed: %v", err)
 	}
@@ -1065,6 +1063,142 @@ func setUpIptablesCompatible() error {
 		return fmt.Errorf("exec.Command.Run Failed: %v", err)
 	}
 	return nil
+}
+
+// ルールの入っていないチェインの処理
+// これがなければjampがうまくいかない
+func (d *InternalDataplane) setUpNonRuleChains() {
+	// ルールの入っていないチェインの探索
+	rc, fc, mc , err := findNonRuleChains()
+	if err != nil {
+		log.WithError(err).Panic("setUpNonRuleChains failed")
+	}
+
+	// 多分natはない
+	// chainルール追加
+	for _, t := range d.ipfwRawRuleSet {
+		for name, number := range rc {
+			t.InsertOrAppendRules(name, []ipfw.Rule{
+				{
+					Number: number,
+					Action: ipfw.CountAction{},
+				},
+				{
+					Number: number+99,
+					Action: ipfw.ReturnAction{},
+				},
+			})
+		}
+	}
+	for _, t := range d.ipfwFilterRuleSet {
+		for name, number := range fc {
+			t.InsertOrAppendRules(name, []ipfw.Rule{
+				{
+					Number: number,
+					Action: ipfw.CountAction{},
+				},
+				{
+					Number: number+99,
+					Action: ipfw.ReturnAction{},
+				},
+			})
+		}
+	}
+	for _, t := range d.ipfwMangleRuleSet {
+		for name, number := range mc {
+			t.InsertOrAppendRules(name, []ipfw.Rule{
+				{
+					Number: number,
+					Action: ipfw.CountAction{},
+				},
+				{
+					Number: number+99,
+					Action: ipfw.ReturnAction{},
+				},
+			})
+		}
+	}
+}
+
+// InsertOrAppend版
+func findNonRuleChains() (map[string]uint16, map[string]uint16, map[string]uint16, error) {
+	rawChains    := make(map[string]uint16)
+	filterChains := make(map[string]uint16)
+	mangleChains := make(map[string]uint16)
+
+	// ipfw listの結果から番号を取得
+	var result []int
+	// ipfw list実行
+	cmd := exec.Command("ipfw", "list")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		log.WithError(err).Warnf("Failed to get stdout pipe for ipfw list")
+		return rawChains, filterChains, mangleChains, err
+	}
+	err = cmd.Start()
+	if err != nil {
+		log.WithError(err).Warnf("Failed to start ipfw list")
+		closeErr := stdout.Close()
+		if closeErr != nil {
+			log.WithError(closeErr).Warn("Error closing stdout after Start() failed.")
+		}
+		return rawChains, filterChains, mangleChains, err
+	}
+
+	// 結果のパース
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// ルール番号取得
+		num, ok := ipfw.ExtractLeadingRuleNumber(line)
+		if !ok {
+			log.Warnf("Failed read rule number: %s", line)
+			continue
+		}
+		// chainスタート行ではない or すでにチェイン記録済み
+		if num%100 != 0 || slices.Contains(result, num) {
+			continue
+		}
+		// 値を記録
+		result = append(result, num)
+	}
+
+	fmt.Printf("[souma-log] result: %v\n", result)
+
+	// ChainNameToChainから番号を取得->出力されていないchainをあぶり出し
+	for _, c := range ipfw.ChainNameToChain {
+		/*
+		// TODO: 辻褄合わせ
+		// *append*ついているやつをスキップ
+		if strings.Contains(c.Name, "append") {
+			fmt.Printf("[souma-log] skip %s\n", c.Name)
+			continue
+		}
+		*/
+
+		// resultに値がない（chainNumberが出力されていない）
+		if !slices.Contains(result, int(c.Number)) {
+			// Tableに分けて格納
+			if strings.Contains(c.Name, "R-") {
+				rawChains[c.Name] = c.Number
+				continue
+			}
+			if strings.Contains(c.Name, "F-") {
+				filterChains[c.Name] = c.Number
+				continue
+			}
+			if strings.Contains(c.Name, "M-") {
+				mangleChains[c.Name] = c.Number
+				continue
+			}
+		}
+	}
+	fmt.Printf("[souma-log] raw: %v\n", rawChains)
+	fmt.Printf("[souma-log] filter: %v\n", filterChains)
+	fmt.Printf("[souma-log] mangle: %v\n", mangleChains)
+
+	return rawChains, filterChains, mangleChains, nil
+
 }
 
 func stringToProtocol(protocol string) (labelindex.IpfwTablePortProtocol, error) {

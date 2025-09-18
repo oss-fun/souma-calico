@@ -333,16 +333,10 @@ func (r *DefaultRuleRenderer) filterWorkloadToHostChain(ipVersion uint8) *Chain 
 		Action: CallAction{Target: ChainFilterFromWorkloadDispatch},
 	})
 
-	// If the dispatch chain accepts the packet, it returns to us here.  Apply the configured
-	// action.  Note: we may have done work above to allow the packet and then end up dropping
-	// it here.  We can't optimize that away because there may be other rules (such as log
-	// rules in the policy).
-	for _, action := range r.inputAllowActions {
-		rules = append(rules, Rule{
-			Action:  action,
-			Comment: []string{},
-		})
-	}
+	// skipto対象chainとしての処理
+	rules = append(rules, Rule{
+		Action: SkiptoAction{RuleNumber: 65534},
+	})
 
 	result := &Chain{
 		Name:  ChainFilterWorkloadToHost,
@@ -877,13 +871,6 @@ func (r *DefaultRuleRenderer) StaticRawPreroutingChain(ipVersion uint8) *Chain {
 			Action: TagAction{TagNumber: tagFromWorkload},
 		})
 	}
-
-	// Send workload traffic to a specific chain to skip the rpf check for some workloads
-	rules = append(rules,
-		Rule{
-			Match:  Match().Tagged(tagFromWorkload),
-			Action: CallAction{Target: ChainRawRpfSkip},
-		})
 
 	rules = append(rules,
 		// Send non-workload traffic to the untracked policy chains.
