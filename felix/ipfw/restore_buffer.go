@@ -17,6 +17,7 @@
 package ipfw
 
 import (
+	//"os/exec"
 	"bytes"
 	"fmt"
 
@@ -110,7 +111,25 @@ func (b *RestoreInputBuilder) maybeWriteTransactionOpener() {
 func (b *RestoreInputBuilder) WriteForwardReference(chainName string) {
 	b.maybeWriteTransactionOpener()
 	b.writeFormattedLine("# Chain Name: %s", chainName)
+	//addChainToIpfw(chainName)
 }
+/*
+func addChainToIpfw(chainName string) {
+	fmt.Printf("[souma-log] chainName: %s\n", chainName)
+	c, ok := ChainNameToChain[chainName]
+	if !ok {
+		log.Panicf("Err!: %s", chainName)
+		return
+	}
+
+	if err := exec.Command("ipfw", "list", fmt.Sprintf("%d", c.Number)).Run(); err == nil {
+		_ = exec.Command("ipfw", "add", fmt.Sprintf("%d", c.Number), "// cali:", chainName).Run()
+		_ = exec.Command("ipfw", "add", fmt.Sprintf("%d", c.Number+99), "return", "ip from any to any", "// cali:", chainName).Run()
+	}
+	return
+}
+*/
+
 
 // WriteLine writes a line of iptables instructions to the buffer.  Intended for writing the actual rules.
 // Panics if there is no open transaction.

@@ -15,7 +15,7 @@ import (
 	"time"
 	"io"
 
-	//"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 
@@ -363,11 +363,6 @@ func (t *RuleSet) UpdateChain(chain *Chain) {
 		t.maybeDecrefReferredChains(chain.Name, oldChain.Rules)
 	}
 
-	// TODO
-	if err := chain.Organize(); err != nil {	
-		t.logCxt.WithError(err).WithField("chainName", chain.Name).Panic("Chain Organize failed")
-	}
-
 	// chainNameToChainの登録
 	t.chainNameToChain[chain.Name] = chain
 	// ChainNameToChainの登録
@@ -516,13 +511,13 @@ func (t *RuleSet) loadDataplaneState() {
 				chainName,
 				numEmptyStrings(dpHashes),
 			)
-			//if diff := cmp.Diff(expectedHashes, dpHashes); diff != "" {
-			//	fmt.Printf("[souma-log] len(diff)=%d\n", len(diff))
-			//	fmt.Printf("[souma-log] as-v = %v\n", diff)
-			//	fmt.Printf("[souma-log] as-s = %s\n", diff)
-			//	fmt.Printf("[souma-log] as-q = %q\n", diff)
-			//	fmt.Printf("[souma-log] mismatch (-expected +got):\n%s", diff)
-			//}
+			if diff := cmp.Diff(expectedHashes, dpHashes); diff != "" {
+				fmt.Printf("[souma-log] len(diff)=%d\n", len(diff))
+				fmt.Printf("[souma-log] as-v = %v\n", diff)
+				fmt.Printf("[souma-log] as-s = %s\n", diff)
+				fmt.Printf("[souma-log] as-q = %q\n", diff)
+				fmt.Printf("[souma-log] mismatch (-expected +got):\n%s", diff)
+			}
 			if !reflect.DeepEqual(dpHashes, expectedHashes) {
 				logCxt.WithFields(log.Fields{
 					"expectedRuleIDs": expectedHashes,
@@ -531,9 +526,13 @@ func (t *RuleSet) loadDataplaneState() {
 				t.dirtyInsertAppend.Add(chainName)
 			}
 		} else {
-			//if diff := cmp.Diff(expectedHashes, dpHashes); diff != "" {
-			//	fmt.Printf("[souma-log] mismatch (-expected +got):\n%s", diff)
-			//}
+			if diff := cmp.Diff(expectedHashes, dpHashes); diff != "" {
+				fmt.Printf("[souma-log] len(diff)=%d\n", len(diff))
+				fmt.Printf("[souma-log] as-v = %v\n", diff)
+				fmt.Printf("[souma-log] as-s = %s\n", diff)
+				fmt.Printf("[souma-log] as-q = %q\n", diff)
+				fmt.Printf("[souma-log] mismatch (-expected +got):\n%s", diff)
+			}
 			// One of our chains, should match exactly.
 			if !reflect.DeepEqual(dpHashes, expectedHashes) {
 				logCxt.Warn("Detected out-of-sync Calico chain, marking for resync")

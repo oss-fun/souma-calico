@@ -927,6 +927,7 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 	}
 	for _, t := range d.ipfwNATRuleSet {
 		t.UpdateChains(d.ruleRenderer.StaticNATTableChains(t.IPVersion))
+		/*
 		t.InsertOrAppendRules("N-PREROUTING", []ipfw.Rule{
 			{
 				Number: 13,
@@ -937,6 +938,7 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 				Action: ipfw.CallAction{Target: rules.ChainNATPrerouting},
 			},
 		})
+		*/
 		t.AppendRules("N-POSTROUTING", []ipfw.Rule{
 			{
 				Number: 25,
@@ -947,10 +949,12 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 				Action: ipfw.CallAction{Target: rules.ChainNATPostrouting},
 			},
 		})
+		/*
 		t.InsertOrAppendRules("N-OUTPUT", []ipfw.Rule{{
 			Number: 22,
 			Action: ipfw.CallAction{Target: rules.ChainNATOutput},
 		}})
+		*/
 	}
 	for _, t := range d.ipfwMangleRuleSet {
 		t.UpdateChains(d.ruleRenderer.StaticMangleTableChains(t.IPVersion))

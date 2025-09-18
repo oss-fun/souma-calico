@@ -319,6 +319,9 @@ func SetChainNum(chainName string, num uint16) {
 			Number: num,
 			Rules: []Rule{},
 		}
+		if err := newChain.Organize(); err != nil {
+			log.WithField("err", err).Panicf("Failed SetChainNum newChain Organize: %s", chainName)
+		}
 		ChainNameToChain[chainName] = newChain
 	}
 }
