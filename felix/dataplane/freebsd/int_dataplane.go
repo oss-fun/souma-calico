@@ -1065,6 +1065,7 @@ func setUpIptablesCompatible() error {
 	return nil
 }
 
+// TODO: これうまく動いていない（skiptoやcallで呼ばれるチェインが定義されきってない）
 // ルールの入っていないチェインの処理
 // これがなければjampがうまくいかない
 func (d *InternalDataplane) setUpNonRuleChains() {
@@ -1523,6 +1524,7 @@ func (d *InternalDataplane) apply() {
 		}(ipfwTable)
 	}
 
+	/*
 	// Update the routing table in parallel with the other updates.  We'll wait for it to finish
 	// before we return.
 	var routesWG sync.WaitGroup
@@ -1538,6 +1540,7 @@ func (d *InternalDataplane) apply() {
 			routesWG.Done()
 		}(r)
 	}
+	*/
 
 	// Update the routing rules in parallel with the other updates.  We'll wait for it to finish
 	// before we return.
@@ -1597,8 +1600,10 @@ func (d *InternalDataplane) apply() {
 		}
 	}
 
+	/*
 	// Wait for the route updates to finish.
 	routesWG.Wait()
+	*/
 
 	// Wait for the rule updates to finish.
 	rulesWG.Wait()

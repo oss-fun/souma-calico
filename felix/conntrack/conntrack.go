@@ -19,7 +19,7 @@ import (
 	"net"
 	"os/exec"
 
-	log "github.com/sirupsen/logrus"
+	//log "github.com/sirupsen/logrus"
 )
 
 // For TCP/UDP, each conntrack entry holds two copies of the tuple
@@ -77,6 +77,6 @@ type CmdIface interface {
 }
 
 func (c Conntrack) RemoveConntrackFlows(ipVersion uint8, ipAddr net.IP) {
-	logCxt := log.WithFields(log.Fields{"Conntrack": c, "ipVersion": ipVersion, "ipAddr": ipAddr})
-	logCxt.Warn("RemoveConntrackFlows not implemeted")
+	//logCxt := log.WithFields(log.Fields{"Conntrack": c, "ipVersion": ipVersion, "ipAddr": ipAddr})
+	//logCxt.Warn("RemoveConntrackFlows not implemeted")
 }
