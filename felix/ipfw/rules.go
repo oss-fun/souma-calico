@@ -168,19 +168,22 @@ func (c *Chain) RuleHashes(features *environment.Features) []string {
 }
 
 func (c *Chain) GetStartRuleNum() uint16 {
-	switch {
-	case c.Number != 0:
+	if c.Number != 0 {
 		return c.Number
+	}
+
+	chain, ok := ChainNameToChain[c.Name]
+	if ok {
+		if chain.Number != 0 {
+			c.Number = chain.Number
+			return c.Number
+		}
+	}
 	//case len(c.Rules) != 0:
 	//	c.Number = c.Rules[0].Number
 	//	return c.Number
-	//case ChainNameToChain[c.Name] != 0:
-	//	c.Number = ChainNameToChainNum[c.Name]
-	//	return c.Number
-	default:
-		// log.Panic("GetStartRuleNum failed: no number found for chain ", c.Name)
-		return 65535
-	}
+	
+	return 65535
 }
 
 // chain番号とかルール番号の成形

@@ -146,6 +146,43 @@ const (
 	KubeProxyInsertRuleRegex = `-j KUBE-[a-zA-Z0-9-]*SERVICES|-j KUBE-FORWARD`
 )
 
+var defaultChain = map[string]int{
+	// INPUT
+	ChainRawPrerouting:                  100,
+	ChainRawDispatchFromHostEndpoint:    200,
+	ChainManglePrerouting:               300,
+	ChainMangleDispatchFromHostEndpoint: 400,
+	ChainFilterInput:                    500,
+	ChainFilterWorkloadToHost:           600,
+	ChainFilterFromWorkloadDispatch:     700,
+	ChainFilterDispatchFromHostEndpoint: 800,
+	// OUTPUT
+	ChainRawOutput:                    900,
+	ChainRawDispatchToHostEndpoint:    1000,
+	ChainFilterOutput:                 1100,
+	ChainFilterDispatchToHostEndpoint: 1200,
+	ChainManglePostrouting:            1300,
+	ChainMangleDispatchToHostEndpoint: 1400,
+	ChainNATPostrouting:               1500,
+	ChainNATOutgoing:                  1600,
+	//FORWARD
+	ChainFilterForward:                         1700,
+	ChainFilterDispatchFromHostEndPointForward: 1800,
+	ChainFilterToWorkloadDispatch:              1900,
+	ChainFilterDispatchToHostEndpointForward:   2000,
+	ChainFilterCIDRBlock:                       2100,
+}
+
+func InitChainNameToChain() {
+	for name, num := range defaultChain {
+		c := &ipfw.Chain {
+			Number: uint16(num),
+			Name: name,
+		}
+		ipfw.ChainNameToChain[name] = c
+	}
+}
+
 type PolicyDirection string
 
 const (

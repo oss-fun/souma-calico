@@ -890,6 +890,8 @@ func (d *InternalDataplane) doStaticDataplaneConfig() {
 }
 
 func (d *InternalDataplane) setUpIpfwNormal() {
+	rules.InitChainNameToChain()
+
 	if err := setUpIptablesCompatible(); err != nil {
 		log.WithError(err).Panic("setUpIptablesCompatible failed")
 	}
@@ -1565,6 +1567,7 @@ func (d *InternalDataplane) apply() {
 	var reschedDelay time.Duration
 	var ipfwWG sync.WaitGroup
 	for _, t := range d.allIpfwRuleSet {
+		fmt.Printf("[souma-log] ipfw ruleset: %v\n", t)
 		ipfwWG.Add(1)
 		go func(t *ipfw.RuleSet) {
 			tableReschedAfter := t.Apply()
