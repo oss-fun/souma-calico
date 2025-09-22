@@ -121,21 +121,21 @@ func (d *freebsdDataplane) DoNetworking(
 		return "", "", fmt.Errorf("failed to lookup %q: %v", hostVethName, err)
 	}
 
-	if mac, err := net.ParseMAC("EE:EE:EE:EE:EE:EE"); err != nil {
-		d.logger.Infof("failed to parse MAC Address: %v. Using kernel generated MAC.", err)
-	} else {
-		// Set the MAC address on the host side interface so the kernel does not
-		// have to generate a persistent address which fails some times.
-		if err = hostNlHandle.LinkSetHardwareAddr(hostVeth, mac); err != nil {
-			d.logger.Warnf("failed to Set MAC of %q: %v. Using kernel generated MAC.", hostVethName, err)
-		}
-	}
+	//if mac, err := net.ParseMAC("EE:EE:EE:EE:EE:EE"); err != nil {
+	//	d.logger.Infof("failed to parse MAC Address: %v. Using kernel generated MAC.", err)
+	//} else {
+	//	// Set the MAC address on the host side interface so the kernel does not
+	//	// have to generate a persistent address which fails some times.
+	//	if err = hostNlHandle.LinkSetHardwareAddr(hostVeth, mac); err != nil {
+	//		d.logger.Warnf("failed to Set MAC of %q: %v. Using kernel generated MAC.", hostVethName, err)
+	//	}
+	//}
 
 	// Figure out whether we have IPv4 addresses.
 	for _, addr := range result.IPs {
 		if addr.Address.IP.To4() != nil {
 			hasIPv4 = true
-			addr.Address.Mask = net.CIDRMask(31, 32)
+			addr.Address.Mask = net.CIDRMask(24, 32)
 		}
 	}
 
@@ -330,20 +330,11 @@ func (d *freebsdDataplane) configureSysctls(hasIPv4 bool) error {
 // configureContainerSysctls configures necessary sysctls required inside the container netns.
 func (d *freebsdDataplane) configureContainerSysctls(hasIPv4 bool) error {
 	if hasIPv4 {
-		if d.allowIPForwarding {
-			d.logger.Info("Enabling IPv4 forwarding")
-			cmd := exec.Command("sysctl", "-w", "net.inet.ip.forwarding=1")
-			output, err := cmd.CombinedOutput()
-			if err != nil {
-				return fmt.Errorf("failed to set net.inet.ip.forwarding=1:output: %s, err: %s", output, err)
-			}
-		} else {
-			d.logger.Info("Disabling IPv4 forwarding")
-			cmd := exec.Command("sysctl", "-w", "net.inet.ip.forwarding=0")
-			output, err := cmd.CombinedOutput()
-			if err != nil {
-				return fmt.Errorf("failed to set net.inet.ip.forwarding=0:output: %s, err: %s", output, err)
-			}
+		d.logger.Info("Enabling IPv4 forwarding")
+		cmd := exec.Command("sysctl", "-w", "net.inet.ip.forwarding=1")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to set net.inet.ip.forwarding=1:output: %s, err: %s", output, err)
 		}
 	}
 
