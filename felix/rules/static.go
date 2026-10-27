@@ -144,7 +144,7 @@ func (r *DefaultRuleRenderer) StaticFilterOutputForwardEndpointMarkChain() *Chai
 	// interface-name-based dispatch chains.
 	for _, prefix := range r.WorkloadIfacePrefixes {
 		log.WithField("ifacePrefix", prefix).Debug("Adding workload match rules")
-		ifaceMatch := prefix + "+"
+		ifaceMatch := prefix + "*"
 		fwRules = append(fwRules,
 			Rule{
 				Match:  Match().OutInterface(ifaceMatch),
@@ -211,7 +211,7 @@ func (r *DefaultRuleRenderer) filterInputChain(ipVersion uint8) *Chain {
 	// Apply our policy to packets coming from workload endpoints.
 	for _, prefix := range r.WorkloadIfacePrefixes {
 		log.WithField("ifacePrefix", prefix).Debug("Adding workload match rules")
-		ifaceMatch := prefix + "+"
+		ifaceMatch := prefix + "*"
 		inputRules = append(inputRules, Rule{
 			Match:  Match().InInterface(ifaceMatch),
 			Action: SkiptoAction{Target: ChainFilterWorkloadToHost},
