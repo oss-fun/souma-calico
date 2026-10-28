@@ -5,8 +5,8 @@ package ipfw
 import (
 	"fmt"
 	"log"
-	"strings"
 	"regexp"
+	"strings"
 
 	"github.com/projectcalico/calico/felix/proto"
 )
@@ -103,11 +103,11 @@ func (m MatchCriteria) TableNames() (tableNames []string) {
 }
 
 func (m MatchCriteria) InInterface(iface string) MatchCriteria {
-	return append(m, fmt.Sprintf("recv %s", iface))
+	return append(m, fmt.Sprintf("recv '%s'", iface))
 }
 
 func (m MatchCriteria) OutInterface(iface string) MatchCriteria {
-	return append(m, fmt.Sprintf("xmit %s", iface))
+	return append(m, fmt.Sprintf("xmit '%s'", iface))
 }
 
 func (m MatchCriteria) SourcePorts(port uint16) MatchCriteria {

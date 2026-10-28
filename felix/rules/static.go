@@ -144,7 +144,7 @@ func (r *DefaultRuleRenderer) StaticFilterOutputForwardEndpointMarkChain() *Chai
 	// interface-name-based dispatch chains.
 	for _, prefix := range r.WorkloadIfacePrefixes {
 		log.WithField("ifacePrefix", prefix).Debug("Adding workload match rules")
-		ifaceMatch := prefix + "+"
+		ifaceMatch := prefix + "*"
 		fwRules = append(fwRules,
 			Rule{
 				Match:  Match().OutInterface(ifaceMatch),
@@ -211,7 +211,7 @@ func (r *DefaultRuleRenderer) filterInputChain(ipVersion uint8) *Chain {
 	// Apply our policy to packets coming from workload endpoints.
 	for _, prefix := range r.WorkloadIfacePrefixes {
 		log.WithField("ifacePrefix", prefix).Debug("Adding workload match rules")
-		ifaceMatch := prefix + "+"
+		ifaceMatch := prefix + "*"
 		inputRules = append(inputRules, Rule{
 			Match:  Match().InInterface(ifaceMatch),
 			Action: SkiptoAction{Target: ChainFilterWorkloadToHost},
@@ -544,7 +544,7 @@ func (r *DefaultRuleRenderer) StaticFilterForwardChains() []*Chain {
 	// Jump to workload dispatch chains.
 	for _, prefix := range r.WorkloadIfacePrefixes {
 		log.WithField("ifacePrefix", prefix).Debug("Adding workload match rules")
-		ifaceMatch := prefix + "+"
+		ifaceMatch := prefix + "*"
 		rules = append(rules,
 			Rule{
 				Match:  Match().InInterface(ifaceMatch),
@@ -629,7 +629,7 @@ func (r *DefaultRuleRenderer) filterOutputChain(ipVersion uint8) *Chain {
 		// If the packet is going to a workload endpoint, apply workload ingress policy if traffic
 		// belongs to an IPVS connection and return at the end.
 		log.WithField("ifacePrefix", prefix).Debug("Adding workload match rules")
-		ifaceMatch := prefix + "+"
+		ifaceMatch := prefix + "*"
 		rules = append(rules,
 			Rule{
 				// if packet goes to a workload endpoint. set return action properly.
@@ -867,7 +867,7 @@ func (r *DefaultRuleRenderer) StaticRawPreroutingChain(ipVersion uint8) *Chain {
 	tagFromWorkload := r.IpfwTagScratch0
 	for _, ifacePrefix := range r.WorkloadIfacePrefixes {
 		rules = append(rules, Rule{
-			Match:  Match().InInterface(ifacePrefix + "+"),
+			Match:  Match().InInterface(ifacePrefix + "*"),
 			Action: TagAction{TagNumber: tagFromWorkload},
 		})
 	}
