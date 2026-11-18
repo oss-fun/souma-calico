@@ -1563,25 +1563,19 @@ func (d *InternalDataplane) apply() {
 	ipfwTableWG.Wait()
 
 	// Update iptables, this should sever any references to now-unused IP sets.
-	var reschedDelayMutex sync.Mutex
+	// NOTE: RuleSet.Apply() は内部でグローバルな ipfw.ChainNameToChain をロック無しで
+	// 読み書きする（Chain.Organize() -> SetNewNumber()）。並列実行すると
+	// "concurrent map iteration and map write" で落ちる上、チェーン番号の衝突も
+	// 起こり得るため、テーブルは 1 つずつ順番に適用する。
 	var reschedDelay time.Duration
-	var ipfwWG sync.WaitGroup
 	for _, t := range d.allIpfwRuleSet {
 		fmt.Printf("[souma-log] ipfw ruleset: %v\n", t)
-		ipfwWG.Add(1)
-		go func(t *ipfw.RuleSet) {
-			tableReschedAfter := t.Apply()
-
-			reschedDelayMutex.Lock()
-			defer reschedDelayMutex.Unlock()
-			if tableReschedAfter != 0 && (reschedDelay == 0 || tableReschedAfter < reschedDelay) {
-				reschedDelay = tableReschedAfter
-			}
-			d.reportHealth()
-			ipfwWG.Done()
-		}(t)
+		tableReschedAfter := t.Apply()
+		if tableReschedAfter != 0 && (reschedDelay == 0 || tableReschedAfter < reschedDelay) {
+			reschedDelay = tableReschedAfter
+		}
+		d.reportHealth()
 	}
-	ipfwWG.Wait()
 
 	// Now clean up any left-over IP sets.
 	var ipfwTableNeedsReschedule atomic.Bool
