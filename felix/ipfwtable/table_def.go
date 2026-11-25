@@ -185,8 +185,8 @@ func (c IPVersionConfig) NameForTempIpfwTable(n uint) string {
 }
 
 func (c IPVersionConfig) NameForMainIpfwTable(id string) string {
-	// ipfw のテーブル名は [a-zA-Z0-9_.-] しか使えないので ":" を "_" にする
-	return combineAndTrunc(c.mainTableNamePrefix, strings.ReplaceAll(id, ":", "_"), MaxIpfwTableNameLength)
+	// ipfw のテーブル名は [a-zA-Z0-9_.-] しか使えないので ":" を "." にする
+	return combineAndTrunc(c.mainTableNamePrefix, strings.ReplaceAll(id, ":", "."), MaxIpfwTableNameLength)
 }
 
 func (c IPVersionConfig) OwnsIpfwTable(name string) bool {
