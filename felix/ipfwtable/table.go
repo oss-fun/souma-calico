@@ -417,141 +417,106 @@ func (s *IpfwTable) CalicoIpfwTable() ([]string, error) {
 	return ipfwTable, nil
 }
 
+// ipfw table NAME list の出力例:
+//
+//	--- table(cali40s.xxxx), set(0) ---
+//	10.0.0.1/32 0
+//	10.0.0.2/32 0
+//
+// Linux の ipset list と違い Name:/Type:/Header:/Members: 行は無く、
+// 見出し行の直後に「キー 値」の行がそのまま並ぶ。型や maxelem も出力されない。
+var ipfwTableListHeaderRegexp = regexp.MustCompile(`^--- table\(([^)]+)\),`)
+
 func (s *IpfwTable) resyncIpfwTable(ipfwTableName string) error {
 	if ipfwTableName == "" {
-		return fmt.Errorf("no ipset name specified")
+		return fmt.Errorf("no ipfw table name specified")
 	}
-	
-	err := s.runIpfwTableList(ipfwTableName, func(scanner *bufio.Scanner) error {
-		debug := log.GetLevel() >= log.DebugLevel
-		ipfwTableName := ""
-		var ipfwTableType IpfwTableType
-		for scanner.Scan() {
-			line := scanner.Text()
-			if debug {
-				s.logCxt.Debugf("Parsing line: %q", line)
-			}
-			if strings.HasPrefix(line, "Name:") {
-				ipfwTableName = strings.Split(line, " ")[1]
-				if debug {
-					s.logCxt.WithField("setName", ipfwTableName).Debug("Parsing IP set.")
-				}
-			}
-			if strings.HasPrefix(line, "Type:") {
-				ipfwTableType = IpfwTableType(strings.Split(line, " ")[1])
-				if debug {
-					s.logCxt.WithField("type", ipfwTableType).Debug("Parsed type of IP set.")
-				}
-			}
-			if strings.HasPrefix(line, "Header:") {
-				// When we hit the Header line we should know the name, and type of the IP set, which lets
-				// us update the tracker.
-				parts := strings.Split(line, " ")
-				meta := dataplaneMetadata{
-					Type: ipfwTableType,
-				}
-				for idx, p := range parts {
-					if p == "maxelem" {
-						if idx+1 >= len(parts) {
-							return fmt.Errorf(
-								"failed to parse ipset list Header line, nothing after 'maxelem'. line: '%v'", line)
-						}
-						maxElem, err := strconv.Atoi(parts[idx+1])
-						if err != nil {
-							return fmt.Errorf(
-								"Failed to parse ipset list Header line. line: '%v', err: %w", line, err)
-						}
-						meta.MaxSize = maxElem
-						break
-					}
-					if p == "range" {
-						if idx+1 >= len(parts) {
-							return fmt.Errorf(
-								"Failed to parse ipset list Header line, nothing after 'range'. line: '%v'", line)
-						}
-						// For bitmaps, we see "range 123-456"
-						rMin, rMAx, err := ParseRange(parts[idx+1])
-						if err != nil {
-							return fmt.Errorf(
-								"Failed to parse ipset list Header line. line: '%v', err: %w", line, err)
-						}
-						meta.RangeMin = rMin
-						meta.RangeMax = rMAx
-						break
-					}
-				}
-				s.setNameToProgrammedMetadata.Dataplane().Set(ipfwTableName, meta)
-			}
-			if strings.HasPrefix(line, "Members:") {
-				// Start of a Members entry, following this, there'll be one member per
-				// line then EOF or a blank line.
+	debug := log.GetLevel() >= log.DebugLevel
+	logCxt := s.logCxt.WithField("setName", ipfwTableName)
 
-				// Look up to see if this is one of our IP sets.
-				if !s.IPVersionConfig.OwnsIpfwTable(ipfwTableName) || s.IPVersionConfig.IsTempIpfwTableName(ipfwTableName) {
-					if debug {
-						s.logCxt.WithField("name", ipfwTableName).Debug("Skip parsing members of IP set.")
-					}
-					return nil
-				}
+	// ipfw の list 出力からは型・maxelem 等のメタデータが取れない。
+	// Felix が把握しているテーブルなら、その希望メタデータが実機と一致しているとみなす
+	// (ipfw では ip/net はどちらも "addr" 型で作るため区別できない)。
+	// 把握していないテーブルは空のメタデータ(型不明)で登録し、後段で削除対象になる。
+	meta, known := s.setNameToAllMetadata[ipfwTableName]
+	if !known {
+		meta = dataplaneMetadata{}
+	}
+	s.setNameToProgrammedMetadata.Dataplane().Set(ipfwTableName, meta)
 
-				if !ipfwTableType.IsValid() {
-					s.logCxt.WithFields(log.Fields{
-						"setName": ipfwTableName,
-						"type":    string(ipfwTableType),
-					}).Warning("Dataplane IP set has unknown type.")
-				}
-
-				// One of our IP sets; we need to parse its members.
-				logCxt := s.logCxt.WithField("setName", ipfwTableName)
-				memberTracker := s.getOrCreateMemberTracker(ipfwTableName)
-				numExtrasExpected := memberTracker.PendingDeletions().Len()
-				err := memberTracker.Dataplane().ReplaceFromIter(func(f func(k IpfwTableMember)) error {
-					for scanner.Scan() {
-						line := scanner.Text()
-						if line == "" {
-							// End of members
-							break
-						}
-						var canonMember IpfwTableMember
-						if ipfwTableType.IsValid() {
-							canonMember = ipfwTableType.CanonicaliseMember(line)
-						} else {
-							// Unknown type found in dataplane, record it as
-							// a raw string.  Then we'll clean up the IP set
-							// when we go to sync.
-							canonMember = rawIpfwTableMember(line)
-						}
-						if debug {
-							logCxt.WithFields(log.Fields{
-								"member": line,
-								"canon":  canonMember,
-							}).Debug("Found member in dataplane")
-						}
-						f(canonMember)
-					}
-					return scanner.Err()
-				})
-				if err != nil {
-					return fmt.Errorf("Failed to read members from 'ipset list'. err: %w", err)
-				}
-
-				if numMissing := memberTracker.PendingUpdates().Len(); numMissing > 0 {
-					logCxt.WithField("numMissing", numMissing).Info(
-						"Resync found members missing from dataplane.")
-				}
-				if numExtras := memberTracker.PendingDeletions().Len() - numExtrasExpected; numExtras > 0 {
-					logCxt.WithField("numExtras", numExtras).Info(
-						"Resync found extra members in dataplane.")
-				}
-
-				s.updateDirtiness(ipfwTableName)
-			}
+	// Calico のメインテーブル以外(一時テーブル等)はメンバーを読む必要がない。
+	if !s.IPVersionConfig.OwnsIpfwTable(ipfwTableName) || s.IPVersionConfig.IsTempIpfwTableName(ipfwTableName) {
+		if debug {
+			logCxt.Debug("Skip parsing members of ipfw table.")
 		}
-		return scanner.Err()
+		return nil
+	}
+
+	ipfwTableType := meta.Type
+	if !ipfwTableType.IsValid() {
+		logCxt.WithField("type", string(ipfwTableType)).Warning(
+			"Dataplane ipfw table has unknown type.")
+	}
+
+	memberTracker := s.getOrCreateMemberTracker(ipfwTableName)
+	numExtrasExpected := memberTracker.PendingDeletions().Len()
+
+	err := s.runIpfwTableList(ipfwTableName, func(scanner *bufio.Scanner) error {
+		return memberTracker.Dataplane().ReplaceFromIter(func(f func(k IpfwTableMember)) error {
+			inTable := false
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if debug {
+					logCxt.Debugf("Parsing line: %q", line)
+				}
+				if line == "" {
+					continue
+				}
+				if match := ipfwTableListHeaderRegexp.FindStringSubmatch(line); match != nil {
+					if match[1] != ipfwTableName {
+						return fmt.Errorf("unexpected table %q in 'ipfw table %v list' output",
+							match[1], ipfwTableName)
+					}
+					inTable = true
+					continue
+				}
+				if !inTable {
+					continue
+				}
+				// "10.0.0.1/32 0" の先頭フィールド(キー)がメンバー。後ろは value。
+				key := strings.Fields(line)[0]
+				var canonMember IpfwTableMember
+				if ipfwTableType.IsValid() {
+					canonMember = ipfwTableType.CanonicaliseMember(key)
+				} else {
+					// 型不明のテーブルは生文字列で記録し、同期時に掃除させる。
+					canonMember = rawIpfwTableMember(key)
+				}
+				if debug {
+					logCxt.WithFields(log.Fields{
+						"member": key,
+						"canon":  canonMember,
+					}).Debug("Found member in dataplane")
+				}
+				f(canonMember)
+			}
+			return scanner.Err()
+		})
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read members from 'ipfw table %v list'. err: %w", ipfwTableName, err)
 	}
+
+	if numMissing := memberTracker.PendingUpdates().Len(); numMissing > 0 {
+		logCxt.WithField("numMissing", numMissing).Info(
+			"Resync found members missing from dataplane.")
+	}
+	if numExtras := memberTracker.PendingDeletions().Len() - numExtrasExpected; numExtras > 0 {
+		logCxt.WithField("numExtras", numExtras).Info(
+			"Resync found extra members in dataplane.")
+	}
+
+	s.updateDirtiness(ipfwTableName)
 	return nil
 }
 
