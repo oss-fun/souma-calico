@@ -15,8 +15,6 @@
 package intdataplane
 
 import (
-	"strings"
-
 	log "github.com/sirupsen/logrus"
 
 	"github.com/projectcalico/calico/libcalico-go/lib/set"
@@ -41,8 +39,8 @@ type policyManager struct {
 }
 
 type policyRenderer interface {
-	PolicyToIpfwChains(policyID *proto.PolicyID, policy *proto.Policy, ipVersion uint8) []*ipfw.Chain
-	ProfileToIpfwChains(profileID *proto.ProfileID, policy *proto.Profile, ipVersion uint8) (inbound, outbound *ipfw.Chain)
+	PolicyToIpfwChains(table string, policyID *proto.PolicyID, policy *proto.Policy, ipVersion uint8) []*ipfw.Chain
+	ProfileToIpfwChains(table string, profileID *proto.ProfileID, policy *proto.Profile, ipVersion uint8) (inbound, outbound *ipfw.Chain)
 }
 
 func newPolicyManager(rawRuleSet, mangleRuleSet, filterRuleSet IpfwRuleSet, ruleRenderer policyRenderer, ipVersion uint8) *policyManager {
@@ -80,25 +78,29 @@ func (m *policyManager) OnUpdate(msg interface{}) {
 			return
 		}
 		log.WithField("id", msg.Id).Debug("Updating policy chains")
-		chains := m.ruleRenderer.PolicyToIpfwChains(msg.Id, msg.Policy, m.ipVersion)
 		if m.rawEgressOnly {
+			chains := m.ruleRenderer.PolicyToIpfwChains("raw", msg.Id, msg.Policy, m.ipVersion)
+			outName := rules.PolicyChainNameForTable("raw", rules.PolicyOutboundPfx, msg.Id)
 			neededIpfwTable := set.New[string]()
 			filteredChains := []*ipfw.Chain(nil)
 			for _, chain := range chains {
-				if strings.Contains(chain.Name, string(rules.PolicyOutboundPfx)) {
+				if chain.Name == outName {
 					filteredChains = append(filteredChains, chain)
 					neededIpfwTable.AddAll(chain.IpfwTableNames())
 				}
 			}
-			chains = filteredChains
 			m.updateNeededIpfwTable(msg.Id, neededIpfwTable)
+			m.rawRuleSet.UpdateChains(filteredChains)
+			return
 		}
 		// We can't easily tell whether the policy is in use in a particular table, and, if the policy
 		// type gets changed it may move between tables.  Hence, we put the policy into all tables.
 		// The ipfw layer will avoid programming it if it is not actually used.
-		m.rawRuleSet.UpdateChains(chains)
-		m.mangleRuleSet.UpdateChains(chains)
-		m.filterRuleSet.UpdateChains(chains)
+		// IPFW では全テーブルのチェインが1つのルールセットに入るため、テーブルごとに
+		// テーブル名付きの名前（cali-R-pi-… / cali-M-pi-… / cali-F-pi-…）で作る。
+		m.rawRuleSet.UpdateChains(m.ruleRenderer.PolicyToIpfwChains("raw", msg.Id, msg.Policy, m.ipVersion))
+		m.mangleRuleSet.UpdateChains(m.ruleRenderer.PolicyToIpfwChains("mangle", msg.Id, msg.Policy, m.ipVersion))
+		m.filterRuleSet.UpdateChains(m.ruleRenderer.PolicyToIpfwChains("filter", msg.Id, msg.Policy, m.ipVersion))
 	case *proto.ActivePolicyRemove:
 		log.WithField("id", msg.Id).Debug("Removing policy chains")
 		m.cleanUpPolicy(msg.Id)
@@ -108,16 +110,15 @@ func (m *policyManager) OnUpdate(msg interface{}) {
 			return
 		}
 		log.WithField("id", msg.Id).Debug("Updating profile chains")
-		inbound, outbound := m.ruleRenderer.ProfileToIpfwChains(msg.Id, msg.Profile, m.ipVersion)
-		m.filterRuleSet.UpdateChains([]*ipfw.Chain{inbound, outbound})
-		m.mangleRuleSet.UpdateChains([]*ipfw.Chain{outbound})
+		filterIn, filterOut := m.ruleRenderer.ProfileToIpfwChains("filter", msg.Id, msg.Profile, m.ipVersion)
+		m.filterRuleSet.UpdateChains([]*ipfw.Chain{filterIn, filterOut})
+		_, mangleOut := m.ruleRenderer.ProfileToIpfwChains("mangle", msg.Id, msg.Profile, m.ipVersion)
+		m.mangleRuleSet.UpdateChains([]*ipfw.Chain{mangleOut})
 	case *proto.ActiveProfileRemove:
 		log.WithField("id", msg.Id).Debug("Removing profile chains")
-		inName := rules.ProfileChainName(rules.ProfileInboundPfx, msg.Id)
-		outName := rules.ProfileChainName(rules.ProfileOutboundPfx, msg.Id)
-		m.filterRuleSet.RemoveChainByName(inName)
-		m.filterRuleSet.RemoveChainByName(outName)
-		m.mangleRuleSet.RemoveChainByName(outName)
+		m.filterRuleSet.RemoveChainByName(rules.ProfileChainNameForTable("filter", rules.ProfileInboundPfx, msg.Id))
+		m.filterRuleSet.RemoveChainByName(rules.ProfileChainNameForTable("filter", rules.ProfileOutboundPfx, msg.Id))
+		m.mangleRuleSet.RemoveChainByName(rules.ProfileChainNameForTable("mangle", rules.ProfileOutboundPfx, msg.Id))
 	}
 }
 
@@ -125,15 +126,13 @@ func (m *policyManager) cleanUpPolicy(id *proto.PolicyID) {
 	if m.rawEgressOnly {
 		m.updateNeededIpfwTable(id, nil)
 	}
-	inName := rules.PolicyChainName(rules.PolicyInboundPfx, id)
-	outName := rules.PolicyChainName(rules.PolicyOutboundPfx, id)
 	// As above, we need to clean up in all the tables.
-	m.filterRuleSet.RemoveChainByName(inName)
-	m.filterRuleSet.RemoveChainByName(outName)
-	m.mangleRuleSet.RemoveChainByName(inName)
-	m.mangleRuleSet.RemoveChainByName(outName)
-	m.rawRuleSet.RemoveChainByName(inName)
-	m.rawRuleSet.RemoveChainByName(outName)
+	m.filterRuleSet.RemoveChainByName(rules.PolicyChainNameForTable("filter", rules.PolicyInboundPfx, id))
+	m.filterRuleSet.RemoveChainByName(rules.PolicyChainNameForTable("filter", rules.PolicyOutboundPfx, id))
+	m.mangleRuleSet.RemoveChainByName(rules.PolicyChainNameForTable("mangle", rules.PolicyInboundPfx, id))
+	m.mangleRuleSet.RemoveChainByName(rules.PolicyChainNameForTable("mangle", rules.PolicyOutboundPfx, id))
+	m.rawRuleSet.RemoveChainByName(rules.PolicyChainNameForTable("raw", rules.PolicyInboundPfx, id))
+	m.rawRuleSet.RemoveChainByName(rules.PolicyChainNameForTable("raw", rules.PolicyOutboundPfx, id))
 }
 
 func (m *policyManager) updateNeededIpfwTable(id *proto.PolicyID, neededIpfwTable set.Set[string]) {

@@ -305,7 +305,10 @@ func (r *DefaultRuleRenderer) endpointSetTagChain(
 	}
 	return result
 }
-func (r *DefaultRuleRenderer) PolicyGroupToIpfwChains(group *PolicyGroup) []*Chain {
+// PolicyGroupToIpfwChains は table 用のポリシーグループのチェインを返す。
+// グループのチェイン名と、そこから呼ぶポリシーのチェイン名はテーブル名付きにする
+// （PolicyToIpfwChains を参照）。
+func (r *DefaultRuleRenderer) PolicyGroupToIpfwChains(table string, group *PolicyGroup) []*Chain {
 	rules := make([]Rule, 0, len(group.PolicyNames)*2-1)
 	polChainPrefix := PolicyInboundPfx
 	if group.Direction == PolicyDirectionOutbound {
@@ -341,7 +344,8 @@ func (r *DefaultRuleRenderer) PolicyGroupToIpfwChains(group *PolicyGroup) []*Cha
 			match = Match().NotTaggedAnyOf(r.IpfwTagPass, r.IpfwTagAccept)
 		}
 
-		chainToJumpTo := PolicyChainName(
+		chainToJumpTo := PolicyChainNameForTable(
+			table,
 			polChainPrefix,
 			&proto.PolicyID{Name: polName},
 		)
@@ -351,7 +355,7 @@ func (r *DefaultRuleRenderer) PolicyGroupToIpfwChains(group *PolicyGroup) []*Cha
 		})
 	}
 	results := []*Chain{{
-		Name:  group.ChainName(),
+		Name:  group.ChainNameForTable(table),
 		Rules: rules,
 	}}
 	for _, v := range results {
@@ -424,14 +428,15 @@ func (r *DefaultRuleRenderer) endpointIpfwChain(
 			if polGroup.ShouldBeInlined() {
 				// Group is too small to have its own chain.
 				for _, p := range polGroup.PolicyNames {
-					chainsToJumpTo = append(chainsToJumpTo, PolicyChainName(
+					chainsToJumpTo = append(chainsToJumpTo, PolicyChainNameForTable(
+						table,
 						policyPrefix,
 						&proto.PolicyID{Name: p},
 					))
 				}
 			} else {
 				// Group needs its own chain.
-				chainsToJumpTo = []string{polGroup.ChainName()}
+				chainsToJumpTo = []string{polGroup.ChainNameForTable(table)}
 			}
 
 			for _, chainToJumpTo := range chainsToJumpTo {
@@ -485,7 +490,7 @@ func (r *DefaultRuleRenderer) endpointIpfwChain(
 	if chainType == chainTypeNormal {
 		// Then, jump to each profile in turn.
 		for _, profileID := range profileIds {
-			profChainName := ProfileChainName(profilePrefix, &proto.ProfileID{Name: profileID})
+			profChainName := ProfileChainNameForTable(table, profilePrefix, &proto.ProfileID{Name: profileID})
 			rules = append(rules,
 				Rule{Action: CallAction{Target: profChainName}},
 				// If policy marked packet as accepted, it returns, setting the
@@ -630,6 +635,12 @@ func (g *PolicyGroup) ChainName() string {
 		return PolicyGroupInboundPrefix + g.UniqueID()
 	}
 	return PolicyGroupOutboundPrefix + g.UniqueID()
+}
+
+// ChainNameForTable は、テーブル名付きのグループのチェイン名を返す（PolicyToIpfwChains を参照）。
+// ChainName() はテーブルに依存しない識別子として、参照数の管理に使い続ける。
+func (g *PolicyGroup) ChainNameForTable(table string) string {
+	return AddTableNameToChainName(table, g.ChainName())
 }
 
 func (g *PolicyGroup) ShouldBeInlined() bool {

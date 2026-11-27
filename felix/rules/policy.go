@@ -28,16 +28,20 @@ import (
 
 // ruleRenderer defined in rules_defs.go.
 
-func (r *DefaultRuleRenderer) PolicyToIpfwChains(policyID *proto.PolicyID, policy *proto.Policy, ipVersion uint8) []*ipfw.Chain {
+// PolicyToIpfwChains は table（raw / mangle / filter）用のポリシーのチェインを返す。
+// IPFW では全テーブルのチェインが1つのルールセットに入り、RuleSet は名前にテーブル名
+// （F- など）を含むチェインだけを自分のものとして読み直す。そのため、テーブルごとに
+// テーブル名付きの名前で作る（テーブル名がないと、反映済みと認識されず毎回追加し直される）。
+func (r *DefaultRuleRenderer) PolicyToIpfwChains(table string, policyID *proto.PolicyID, policy *proto.Policy, ipVersion uint8) []*ipfw.Chain {
 	inbound := ipfw.Chain{
-		Name:  PolicyChainName(PolicyInboundPfx, policyID),
+		Name:  PolicyChainNameForTable(table, PolicyInboundPfx, policyID),
 		Rules: r.ProtoRulesToIpfwRules(policy.InboundRules, ipVersion, fmt.Sprintf("Policy %s ingress", policyID.Name)),
 	}
 	if err := inbound.Organize(); err != nil {
 		log.WithField("err", err).Panic("Failed inbound Organize")
 	}
 	outbound := ipfw.Chain{
-		Name:  PolicyChainName(PolicyOutboundPfx, policyID),
+		Name:  PolicyChainNameForTable(table, PolicyOutboundPfx, policyID),
 		Rules: r.ProtoRulesToIpfwRules(policy.OutboundRules, ipVersion, fmt.Sprintf("Policy %s egress", policyID.Name)),
 	}
 	if err := outbound.Organize(); err != nil {
@@ -46,16 +50,17 @@ func (r *DefaultRuleRenderer) PolicyToIpfwChains(policyID *proto.PolicyID, polic
 	return []*ipfw.Chain{&inbound, &outbound}
 }
 
-func (r *DefaultRuleRenderer) ProfileToIpfwChains(profileID *proto.ProfileID, profile *proto.Profile, ipVersion uint8) (inbound, outbound *ipfw.Chain) {
+// ProfileToIpfwChains は table 用のプロファイルのチェインを返す（名前の理由は PolicyToIpfwChains を参照）。
+func (r *DefaultRuleRenderer) ProfileToIpfwChains(table string, profileID *proto.ProfileID, profile *proto.Profile, ipVersion uint8) (inbound, outbound *ipfw.Chain) {
 	inbound = &ipfw.Chain{
-		Name:  ProfileChainName(ProfileInboundPfx, profileID),
+		Name:  ProfileChainNameForTable(table, ProfileInboundPfx, profileID),
 		Rules: r.ProtoRulesToIpfwRules(profile.InboundRules, ipVersion, fmt.Sprintf("Profile %s ingress", profileID.Name)),
 	}
 	if err := inbound.Organize(); err != nil {
 		log.WithField("err", err).Panic("Failed inbound Organize")
 	}
 	outbound = &ipfw.Chain{
-		Name:  ProfileChainName(ProfileOutboundPfx, profileID),
+		Name:  ProfileChainNameForTable(table, ProfileOutboundPfx, profileID),
 		Rules: r.ProtoRulesToIpfwRules(profile.OutboundRules, ipVersion, fmt.Sprintf("Profile %s egress", profileID.Name)),
 	}
 	if err := outbound.Organize(); err != nil {
@@ -751,4 +756,14 @@ func ProfileChainName(prefix ProfileChainNamePrefix, profID *proto.ProfileID) st
 		profID.Name,
 		ipfw.MaxChainNameLength,
 	)
+}
+
+// PolicyChainNameForTable は、テーブル名付きのポリシーのチェイン名（例: cali-F-pi-<名前>）を返す。
+func PolicyChainNameForTable(table string, prefix PolicyChainNamePrefix, polID *proto.PolicyID) string {
+	return AddTableNameToChainName(table, PolicyChainName(prefix, polID))
+}
+
+// ProfileChainNameForTable は、テーブル名付きのプロファイルのチェイン名（例: cali-F-pri-<名前>）を返す。
+func ProfileChainNameForTable(table string, prefix ProfileChainNamePrefix, profID *proto.ProfileID) string {
+	return AddTableNameToChainName(table, ProfileChainName(prefix, profID))
 }

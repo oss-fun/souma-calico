@@ -255,7 +255,7 @@ type RuleRenderer interface {
 		egressPolicies []*PolicyGroup,
 		profileIDs []string,
 	) []*ipfw.Chain
-	PolicyGroupToIpfwChains(group *PolicyGroup) []*ipfw.Chain
+	PolicyGroupToIpfwChains(table string, group *PolicyGroup) []*ipfw.Chain
 
 	WorkloadInterfaceAllowChains(table string, endpoints map[proto.WorkloadEndpointID]*proto.WorkloadEndpoint) []*ipfw.Chain
 
@@ -297,8 +297,8 @@ type RuleRenderer interface {
 		preDNATPolicies []*PolicyGroup,
 	) []*ipfw.Chain
 
-	PolicyToIpfwChains(policyID *proto.PolicyID, policy *proto.Policy, ipVersion uint8) []*ipfw.Chain
-	ProfileToIpfwChains(profileID *proto.ProfileID, policy *proto.Profile, ipVersion uint8) (inbound, outbound *ipfw.Chain)
+	PolicyToIpfwChains(table string, policyID *proto.PolicyID, policy *proto.Policy, ipVersion uint8) []*ipfw.Chain
+	ProfileToIpfwChains(table string, profileID *proto.ProfileID, policy *proto.Profile, ipVersion uint8) (inbound, outbound *ipfw.Chain)
 	ProtoRuleToIpfwRules(pRule *proto.Rule, ipVersion uint8) []ipfw.Rule
 
 	MakeNatOutgoingRule(protocol string, action ipfw.Action, ipVersion uint8) ipfw.Rule

@@ -1472,10 +1472,11 @@ func (m *endpointManager) increfGroups(groups []*rules.PolicyGroup) {
 		refcnt := m.policyChainRefCounts[group.ChainName()]
 		if refcnt == 0 {
 			// This group just became active.
-			chains := m.ruleRenderer.PolicyGroupToIpfwChains(group)
-			m.filterRuleSet.UpdateChains(chains)
-			m.mangleRuleSet.UpdateChains(chains)
-			m.rawRuleSet.UpdateChains(chains)
+			// テーブルごとにテーブル名付きの名前で作る（rules.PolicyToIpfwChains を参照）。
+			// 参照数は、テーブルに依存しない group.ChainName() で管理する。
+			m.filterRuleSet.UpdateChains(m.ruleRenderer.PolicyGroupToIpfwChains("filter", group))
+			m.mangleRuleSet.UpdateChains(m.ruleRenderer.PolicyGroupToIpfwChains("mangle", group))
+			m.rawRuleSet.UpdateChains(m.ruleRenderer.PolicyGroupToIpfwChains("raw", group))
 		}
 		m.policyChainRefCounts[group.ChainName()] = refcnt + 1
 	}
@@ -1490,9 +1491,9 @@ func (m *endpointManager) decrefGroups(chainNames []string) {
 		if refcnt == 1 {
 			// This chain just became inactive.
 			log.WithField("chainName", chainName).Debug("Policy group chain no longer referenced.  Removing chain.")
-			m.filterRuleSet.RemoveChainByName(chainName)
-			m.mangleRuleSet.RemoveChainByName(chainName)
-			m.rawRuleSet.RemoveChainByName(chainName)
+			m.filterRuleSet.RemoveChainByName(rules.AddTableNameToChainName("filter", chainName))
+			m.mangleRuleSet.RemoveChainByName(rules.AddTableNameToChainName("mangle", chainName))
+			m.rawRuleSet.RemoveChainByName(rules.AddTableNameToChainName("raw", chainName))
 			delete(m.policyChainRefCounts, chainName)
 			continue
 		}
