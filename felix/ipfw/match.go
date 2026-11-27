@@ -154,6 +154,13 @@ func (m MatchCriteria) ConntrackState(state string) MatchCriteria {
 	return append(m, state)
 }
 
+// RecordState は、このルールに一致したときに動的ルールを作る（"record-state :flowname"）。
+// 動的ルールはプロトコル・送信元/宛先の IP とポートの組で、両方向の通信に一致する（ipfw(8)）。
+// keep-state と異なり、このルール自身では check-state を行わない。
+func (m MatchCriteria) RecordState(flowName string) MatchCriteria {
+	return append(m, fmt.Sprintf("record-state :%s", flowName))
+}
+
 func (m MatchCriteria) SourcePortRanges(ports []*proto.PortRange) MatchCriteria {
 	portsString := PortRangesToMultiport(ports)
 	return append(m, fmt.Sprintf("src-port %s", portsString))

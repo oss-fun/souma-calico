@@ -88,6 +88,19 @@ func (a ReturnAction) String() string {
 	return "return"
 }
 
+// ReturnTagAction は tag を付けてから呼び出し元へ戻る（"return tag N"）。
+// tag は動作の一部（ip_fw.h: O_TAG は ACTION_PTR 以降に置かれる）なので、
+// このルールが record-state で作った動的ルールに check-state で一致したときも、
+// tag を付けて戻る動作がそのまま実行される。
+type ReturnTagAction struct {
+	TypeReturnTag struct{}
+	TagNumber     uint16
+}
+
+func (a ReturnTagAction) String() string {
+	return fmt.Sprintf("return tag %d", a.TagNumber)
+}
+
 type SkiptoAction struct {
 	TypeSkipto struct{}
 	Target     string
@@ -132,11 +145,18 @@ func (a NatAction) String() string {
 	return fmt.Sprintf("nat %d", a.NatNumber)
 }
 
+// CheckStateAction は動的ルールと照合する（"check-state [:flowname]"）。
+// 一致すると、その動的ルールを作ったルールの動作を実行する。一致しなければ次のルールへ進む。
+// ipfw(8): "Check-state rules do not have a body." のため、Rule.renderInner は条件部分を出力しない。
 type CheckStateAction struct {
 	TypeCheckState struct{}
+	FlowName       string
 }
 
 func (a CheckStateAction) String() string {
+	if a.FlowName != "" {
+		return fmt.Sprintf("check-state :%s", a.FlowName)
+	}
 	return "check-state"
 }
 

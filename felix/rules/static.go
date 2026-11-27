@@ -648,6 +648,10 @@ func (r *DefaultRuleRenderer) filterOutputChain(ipVersion uint8) *Chain {
 	rules = append(rules, untagRules(r.allCalicoTags()...)...)
 	rules = append(rules,
 		Rule{
+			// 本家: NotConntrackState("DNAT")（DNAT されていない通信だけ）。
+			// この移植は宛先 NAT（nat PREROUTING / OUTPUT 相当）を実装していないため、
+			// DNAT 状態の接続は存在せず、条件は常に真になる。宛先 NAT を実装する場合は、
+			// SNAT の逆変換と区別した DNAT 状態の判定をここに加えること。
 			Match:  Match(),
 			Action: CallAction{Target: ChainFilterDispatchToHostEndpoint},
 		},
@@ -753,10 +757,14 @@ func (r *DefaultRuleRenderer) StaticManglePreroutingChain(ipVersion uint8) *Chai
 	// for dropping packets, so it is very unlikely that we would be circumventing someone
 	// else's rule to drop a packet.  (And in that case, the user can configure
 	// IpfwMangleAllowAction to be RETURN.)
+	//
+	// 本家: ctstate RELATED,ESTABLISHED → ACCEPT / RETURN。
+	// IPFW の established は TCP の RST / ACK フラグだけを見るため使わず、
+	// エンドポイントのチェインで記録した接続の動的ルール（ConntrackFlowName）と照合する。
+	// 一致すると、記録したルールの動作（Accept の tag を付けて戻る）でこの段階を終える。
 	rules = append(rules,
 		Rule{
-			Match:  Match().ConntrackState("established"),
-			Action: r.mangleAllowAction,
+			Action: CheckStateAction{FlowName: ConntrackFlowName},
 		},
 	)
 
@@ -832,12 +840,14 @@ func (r *DefaultRuleRenderer) StaticManglePostroutingChain(ipVersion uint8) *Cha
 	// does not recalculate the outgoing interface (OIF) until AFTER the filter-OUTPUT chain.
 	// The OIF has been recalculated by the time we hit THIS chain (mangle-POSTROUTING), so we
 	// can reliably apply host endpoint policy here.
+	//
+	// 本家: ConntrackState("DNAT") のときだけ ChainMangleDispatchToHostEndpoint を呼ぶ。
+	// 以前は IPFW の established（TCP の RST / ACK フラグ）に置き換えていたが、DNAT 状態とは別物である。
+	// この移植は宛先 NAT を実装していないため DNAT 状態の接続は存在せず、本家の条件は常に偽になる。
+	// そのため呼び出しを置かない。宛先 NAT を実装する場合は、SNAT の逆変換と区別した
+	// DNAT 状態の判定を設計してから、ここに呼び出しを加えること。
 	rules = append(rules, untagRules(r.allCalicoTags()...)...)
 	rules = append(rules,
-		Rule{
-			Match:  Match().ConntrackState("established"), // DNAT
-			Action: CallAction{Target: ChainMangleDispatchToHostEndpoint},
-		},
 		Rule{
 			Match:   Match().Tagged(r.IpfwTagAccept),
 			Action:  ReturnAction{},

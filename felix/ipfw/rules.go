@@ -71,12 +71,18 @@ func (r Rule) renderInner(fragments []string, prefixFragment string, features *e
 			fragments = append(fragments, actionFragment)
 		}
 	}
-	matchFragment := r.Match.Render()
-	if matchFragment != "" {
-		fragments = append(fragments, matchFragment)
+	if _, isCheckState := r.Action.(CheckStateAction); isCheckState {
+		// check-state は条件部分を持たない。ipfw(8) と sbin/ipfw/ipfw2.c の compile_rule() は、
+		// check-state の直後のコメント（// …）だけを受け付けて残りを読まないため、
+		// 条件部分を付けるとハッシュのコメントが付かなくなる。
 	} else {
-		allPacketMatch := Match().SourceNet("any").DestNet("any").Render()
-		fragments = append(fragments, allPacketMatch)
+		matchFragment := r.Match.Render()
+		if matchFragment != "" {
+			fragments = append(fragments, matchFragment)
+		} else {
+			allPacketMatch := Match().SourceNet("any").DestNet("any").Render()
+			fragments = append(fragments, allPacketMatch)
+		}
 	}
 	if len(r.Comment) > 0 {
 		for _, c := range r.Comment {

@@ -401,7 +401,7 @@ func (r *DefaultRuleRenderer) endpointIpfwChain(
 	if chainType != chainTypeUntracked {
 		// Tracked chain: install conntrack rules, which implement our stateful connections.
 		// This allows return traffic associated with a previously-permitted request.
-		rules = r.appendConntrackRules(rules, allowAction)
+		rules = r.appendConntrackRules(rules)
 	}
 
 	// First set up failsafes.
@@ -452,11 +452,8 @@ func (r *DefaultRuleRenderer) endpointIpfwChain(
 				}
 				// If accept bit is set, return from this chain.  We don't immediately
 				// accept because there may be other policy still to apply.
-				rules = append(rules, Rule{
-					Match:   Match().Tagged(r.IpfwTagAccept),
-					Action:  ReturnAction{},
-					Comment: []string{"Return if policy accepted"},
-				})
+				rules = append(rules, r.acceptReturnRule(chainType,
+					Match().Tagged(r.IpfwTagAccept), "Return if policy accepted"))
 			}
 		}
 
@@ -481,10 +478,8 @@ func (r *DefaultRuleRenderer) endpointIpfwChain(
 			Action:  TagAction{TagNumber: r.IpfwTagAccept},
 			Comment: []string{"Allow forwarded traffic by default"},
 		})
-		rules = append(rules, Rule{
-			Action:  ReturnAction{},
-			Comment: []string{"Return for accepted forward traffic"},
-		})
+		rules = append(rules, r.acceptReturnRule(chainType,
+			Match(), "Return for accepted forward traffic"))
 	}
 
 	if chainType == chainTypeNormal {
@@ -495,11 +490,8 @@ func (r *DefaultRuleRenderer) endpointIpfwChain(
 				Rule{Action: CallAction{Target: profChainName}},
 				// If policy marked packet as accepted, it returns, setting the
 				// accept mark bit.  If that is set, return from this chain.
-				Rule{
-					Match:   Match().Tagged(r.IpfwTagAccept),
-					Action:  ReturnAction{},
-					Comment: []string{"Return if profile accepted"},
-				})
+				r.acceptReturnRule(chainType,
+					Match().Tagged(r.IpfwTagAccept), "Return if profile accepted"))
 		}
 
 		// When rendering normal rules, if no profile marked the packet as accepted, drop
@@ -526,33 +518,45 @@ func (r *DefaultRuleRenderer) endpointIpfwChain(
 	return result
 }
 
-func (r *DefaultRuleRenderer) appendConntrackRules(rules []Rule, allowAction Action) []Rule {
-	// Allow return packets for established connections.
-	if allowAction != (AllowAction{}) {
-		// If we've been asked to return instead of accept the packet immediately,
-		// make sure we flag the packet as allowed.
-		rules = append(rules,
-			Rule{
-				Match:  Match().ConntrackState("established"),
-				Action: TagAction{TagNumber: r.IpfwTagAccept},
-			},
-		)
+// ConntrackFlowName は、ポリシー・プロファイルで許可した接続を記録する動的ルールの名前。
+// 本家の conntrack（ctstate RELATED,ESTABLISHED）を IPFW の動的ルールで再現するために使う。
+const ConntrackFlowName = "calico"
+
+// appendConntrackRules は、以前に許可した接続（両方向）の通信を許可するルールを追加する。
+//
+// 本家は conntrack で ctstate RELATED,ESTABLISHED を許可し、INVALID を破棄する。
+// IPFW の established は TCP の RST / ACK フラグだけを見る（ipfw(8)）ため、状態の判定には使えない。
+// 代わりに IPFW の動的ルールを使う。
+//   - 許可して戻るルール（acceptReturnRule）が record-state で接続の状態を記録する。
+//   - ここで置く check-state が、記録済みの接続（両方向）に一致すると、
+//     記録したルールの動作（Accept の tag を付けて戻る）を実行する。一致しなければ次のルールへ進む。
+//
+// IPFW の動的ルールは、TCP の SYN・FIN・RST に応じて寿命を管理するが、
+// conntrack の RELATED・INVALID と同じ判定は提供しない。そのため、RELATED（ICMP エラーなど）の
+// 許可と INVALID の破棄は再現しない（制限）。
+func (r *DefaultRuleRenderer) appendConntrackRules(rules []Rule) []Rule {
+	return append(rules, Rule{
+		Action: CheckStateAction{FlowName: ConntrackFlowName},
+	})
+}
+
+// acceptReturnRule は、match に一致したら呼び出し元へ戻るルールを返す。
+// 状態を追跡するチェイン（untracked 以外）では、戻るときに接続の状態を記録し、
+// 戻る動作を「Accept の tag を付けて戻る」にする。check-state で記録済みの接続に一致したときは
+// この動作が実行されるため、以後の同じ接続も Accept の tag を付けて戻る。
+func (r *DefaultRuleRenderer) acceptReturnRule(chainType endpointChainType, match MatchCriteria, comment string) Rule {
+	if chainType == chainTypeUntracked {
+		return Rule{
+			Match:   match,
+			Action:  ReturnAction{},
+			Comment: []string{comment},
+		}
 	}
-	rules = append(rules,
-		Rule{
-			Match:  Match().ConntrackState("established"),
-			Action: allowAction,
-		},
-	)
-	if !r.Config.DisableConntrackInvalid {
-		// Drop packets that aren't either a valid handshake or part of an established
-		// connection.
-		rules = append(rules, Rule{
-			Match:  Match().ConntrackState("setup keep-state"),
-			Action: r.IpfwFilterDenyAction(),
-		})
+	return Rule{
+		Match:   match.RecordState(ConntrackFlowName),
+		Action:  ReturnTagAction{TagNumber: r.IpfwTagAccept},
+		Comment: []string{comment},
 	}
-	return rules
 }
 
 // TODO: table追加
