@@ -16,6 +16,7 @@ package rules
 
 import (
 	"os/exec"
+	"strings"
 
 	log "github.com/sirupsen/logrus"
 
@@ -673,8 +674,10 @@ func (r *DefaultRuleRenderer) filterOutputChain(ipVersion uint8) *Chain {
 	return result
 }
 
+// StaticNATTableChains は nat テーブル相当のチェインを返す。
+// NAT インスタンスの設定（StaticNATConfig）は、受信時の逆変換ルールより先に
+// 済ませる必要があるため、ここでは行わず setUpIpfwNormal() から呼ぶ。
 func (r *DefaultRuleRenderer) StaticNATTableChains(ipVersion uint8) (chains []*Chain) {
-	StaticNATConfig()
 	chains = append(chains, r.StaticNATPostroutingChains(ipVersion)...)
 	return
 }
@@ -708,15 +711,27 @@ func (r *DefaultRuleRenderer) StaticNATOutputChains(ipVersion uint8) []*Chain {
 	return chains
 }
 
-func StaticNATConfig() {
-	// TODO
-	// テスト環境にのみ対応
-	// 環境変数や引数から外への通信をするIF名を取得できるようにする
-	nc := NewNatConfig(1).Iface("em0").UnregOnly().Reset()
-
-	if err := exec.Command("ipfw", nc.CmdString()).Run(); err != nil {
-		log.WithError(err).Panic("StaticNATConfig Failed.")
+// StaticNATConfig は NAT インスタンス 1 を外向きインターフェース iface で設定する。
+//
+// iface は IpfwNATOutgoingInterfaceFilter（FELIX_IPFWNATOUTGOINGINTERFACEFILTER）の値で、
+// 未設定の場合は driver_freebsd.go がデフォルト経路のインターフェースを自動検出して渡す。
+// ipfw nat の "if" には実在するインターフェース名を1つ指定する必要があるため、ワイルドカードは使えない。
+func StaticNATConfig(iface string) {
+	if iface == "" {
+		log.Panic("StaticNATConfig: outgoing interface is empty. " +
+			"Set FELIX_IPFWNATOUTGOINGINTERFACEFILTER to the external interface (e.g. em0).")
 	}
+	nc := NewNatConfig(1).Iface(iface).UnregOnly().Reset()
+
+	// ipfw にはオプションを個別の引数として渡す（1つの文字列にまとめると ipfw が解釈できない）。
+	args := strings.Fields(nc.CmdString())
+	if out, err := exec.Command("ipfw", args...).CombinedOutput(); err != nil {
+		log.WithError(err).WithFields(log.Fields{
+			"args":   args,
+			"output": string(out),
+		}).Panic("StaticNATConfig Failed.")
+	}
+	log.WithField("iface", iface).Info("Configured ipfw nat 1 for outgoing NAT.")
 }
 
 func (r *DefaultRuleRenderer) StaticMangleTableChains(ipVersion uint8) []*Chain {

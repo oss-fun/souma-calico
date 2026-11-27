@@ -85,6 +85,21 @@ func StartDataplaneDriver(configParams *config.Config,
 			"endpointMarkNonCali": tagEndpointNonCaliEndpoint,
 		}).Info("Calculated ipfw mark bits")
 
+		// IPFW の NAT で使う外向きインターフェース。
+		// NAT インスタンスの設定（if）、送信時の SNAT（xmit）、受信時の逆変換（recv）で共通に使う。
+		// 未設定ならデフォルト経路のインターフェースを使う。
+		natOutgoingIface := configParams.IpfwNATOutgoingInterfaceFilter
+		if natOutgoingIface == "" {
+			iface, err := detectDefaultRouteInterface()
+			if err != nil {
+				log.WithError(err).Warn("Could not detect the default route interface for ipfw nat; " +
+					"set FELIX_IPFWNATOUTGOINGINTERFACEFILTER")
+			} else {
+				natOutgoingIface = iface
+				log.WithField("iface", iface).Info("Using the default route interface for ipfw nat.")
+			}
+		}
+
 		reservedTables := []idalloc.IndexRange{{Min: 253, Max: 255}}
 		routeTableIndexAllocator := idalloc.NewIndexAllocator(configParams.RouteTableIndices(), reservedTables)
 
@@ -155,7 +170,7 @@ func StartDataplaneDriver(configParams *config.Config,
 				DisableConntrackInvalid: configParams.DisableConntrackInvalidCheck,
 
 				NATPortRange:                       configParams.NATPortRange,
-				IpfwNATOutgoingInterfaceFilter: configParams.IpfwNATOutgoingInterfaceFilter,
+				IpfwNATOutgoingInterfaceFilter: natOutgoingIface,
 				NATOutgoingAddress:                 configParams.NATOutgoingAddress,
 				BPFEnabled:                         configParams.BPFEnabled,
 				ServiceLoopPrevention:              configParams.ServiceLoopPrevention,
@@ -229,6 +244,22 @@ func StartDataplaneDriver(configParams *config.Config,
 
 func SupportsBPF() error {
 	return fmt.Errorf("BPF dataplane is not supported on FreeBSD")
+}
+
+// detectDefaultRouteInterface は `route -n get default` の "interface:" 行から
+// デフォルト経路のインターフェース名を返す。
+func detectDefaultRouteInterface() (string, error) {
+	out, err := exec.Command("route", "-n", "get", "default").Output()
+	if err != nil {
+		return "", fmt.Errorf("route -n get default failed: %w", err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == "interface:" {
+			return fields[1], nil
+		}
+	}
+	return "", fmt.Errorf("no interface line in route -n get default output")
 }
 
 func ConfigurePrometheusMetrics(configParams *config.Config) {

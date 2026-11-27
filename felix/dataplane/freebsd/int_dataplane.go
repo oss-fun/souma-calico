@@ -892,20 +892,22 @@ func (d *InternalDataplane) doStaticDataplaneConfig() {
 func (d *InternalDataplane) setUpIpfwNormal() {
 	rules.InitChainNameToChain()
 
-	if err := setUpIptablesCompatible(); err != nil {
+	// NAT インスタンスは、それを参照する受信時の逆変換ルール（IN_REVERSE_NAT）より先に設定する。
+	// 設定前のインスタンスを参照するルールに当たったパケットは破棄されるため。
+	natIface := d.config.RulesConfig.IpfwNATOutgoingInterfaceFilter
+	rules.StaticNATConfig(natIface)
+
+	if err := setUpIptablesCompatible(natIface); err != nil {
 		log.WithError(err).Panic("setUpIptablesCompatible failed")
 	}
 
 	for _, t := range d.ipfwRawRuleSet {
 		rawChains := d.ruleRenderer.StaticRawTableChains(t.IPVersion)
 		t.UpdateChains(rawChains)
+		// 受信時の共通区画で1回だけ評価する（ホスト宛て・転送の両方を含む）
 		t.InsertOrAppendRules("R-PREROUTING", []ipfw.Rule{
 			{
 				Number: 11,
-				Action: ipfw.CallAction{Target: rules.ChainRawPrerouting},
-			},
-			{
-				Number: 31,
 				Action: ipfw.CallAction{Target: rules.ChainRawPrerouting},
 			},
 		})
@@ -925,8 +927,9 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 		}}
 		ffRule = append(ffRule, d.ruleRenderer.StaticFilterForwardAppendRules()...)
 		t.InsertOrAppendRules("F-FORWARD", ffRule)
+		// INPUT 相当は、逆変換後の宛先がホストだったパケットの区画で評価する
 		t.InsertOrAppendRules("F-INPUT", []ipfw.Rule{{
-			Number: 14,
+			Number: 34,
 			Action: ipfw.CallAction{Target: rules.ChainFilterInput},
 		}})
 		t.InsertOrAppendRules("F-OUTPUT", []ipfw.Rule{{
@@ -936,14 +939,12 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 	}
 	for _, t := range d.ipfwNATRuleSet {
 		t.UpdateChains(d.ruleRenderer.StaticNATTableChains(t.IPVersion))
+		// N-PREROUTING 相当（宛先 NAT）を有効にする場合は、受信時の共通区画で
+		// M-PREROUTING（12）の後、逆変換（IN_REVERSE_NAT = 13）の前後の順序を設計してから置くこと。
 		/*
 		t.InsertOrAppendRules("N-PREROUTING", []ipfw.Rule{
 			{
 				Number: 13,
-				Action: ipfw.CallAction{Target: rules.ChainNATPrerouting},
-			},
-			{
-				Number: 33,
 				Action: ipfw.CallAction{Target: rules.ChainNATPrerouting},
 			},
 		})
@@ -968,13 +969,10 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 	}
 	for _, t := range d.ipfwMangleRuleSet {
 		t.UpdateChains(d.ruleRenderer.StaticMangleTableChains(t.IPVersion))
+		// 受信時の共通区画で1回だけ評価する（ホスト宛て・転送の両方を含む）
 		t.InsertOrAppendRules("M-PREROUTING", []ipfw.Rule{
 			{
 				Number: 12,
-				Action: ipfw.CallAction{Target: rules.ChainManglePrerouting},
-			},
-			{
-				Number: 32,
 				Action: ipfw.CallAction{Target: rules.ChainManglePrerouting},
 			},
 		})
@@ -995,53 +993,60 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 // iptables の各 hook に相当する処理を、IPFW のどの通過で評価するかの振り分け。
 //
 // 通常の IPv4 の転送経路では、IPFW は同じパケットを受信時（in）と送信時（out）の
-// 両方で評価し得る（ipfw(8)）。転送パケットを1つの区画にまとめると、
-// PREROUTING・FORWARD・POSTROUTING 相当の処理が両方の通過で実行されるため、
-// 転送パケットは向きで2つの区画に分ける。
+// 両方で評価し得る（ipfw(8)）。そのため、受信時と送信時で区画を分ける。
 //
-//	  1 ホスト宛て（in）       → 10〜19: R/M-PREROUTING → F-INPUT
-//	  2 ホスト発（out）        → 20〜29: R-OUTPUT → F-OUTPUT → M/N-POSTROUTING
-//	  3 転送・受信時（in）     → 30〜39: R-PREROUTING → M-PREROUTING
-//	  4 転送・送信時（out）    → 40〜49: F-FORWARD → M-POSTROUTING → N-POSTROUTING
+//	1 受信時（in）の共通 → 10〜19: R-PREROUTING → M-PREROUTING → 逆変換（nat）
+//	                                → 変換後の宛先がホストなら 30 へ、そうでなければ受信時の評価を終了
+//	                     → 30〜39: INPUT 相当（F-INPUT）
+//	2 ホスト発（out）    → 20〜29: R-OUTPUT → F-OUTPUT → M/N-POSTROUTING
+//	3 転送・送信時（out）→ 40〜49: F-FORWARD → M-POSTROUTING → N-POSTROUTING（SNAT）
+//
+// 逆変換を raw / mangle PREROUTING 相当の後に置くのは、Linux の PREROUTING で
+// mangle（NF_IP_PRI_MANGLE = -150）が宛先 NAT（NF_IP_PRI_NAT_DST = -100）より先に動き、
+// Calico の pre-DNAT ポリシーが変換前の宛先で評価されるため。
+// 逆変換の後は、net.inet.ip.fw.one_pass=0（configureKernel で設定）により
+// nat ルールの次（IN_TO_LOCAL）から評価が続き、変換後の宛先で振り分けられる。
 //
 // FORWARD 相当を送信時に置くのは、xmit が送信時にしか判定できないため
 // （"the xmit interface can only be tested on outgoing packets"）。送信時でも recv は判定できる。
 const (
-	IN_ENTRY      = 1
-	OUT_ENTRY     = 2
-	FOR_IN_ENTRY  = 3
-	FOR_OUT_ENTRY = 4
-	END_ENTRY     = 5
-	IN_RULE       = 10
-	IN_END        = 19
-	OUT_RULE      = 20
-	OUT_END       = 29
-	FOR_IN_RULE   = 30
-	FOR_IN_END    = 39
-	FOR_OUT_RULE  = 40
-	FOR_OUT_END   = 49
-	END_RULE      = 65534
+	IN_ENTRY       = 1
+	OUT_ENTRY      = 2
+	FOR_OUT_ENTRY  = 3
+	END_ENTRY      = 4
+	IN_RULE        = 10
+	IN_REVERSE_NAT = 13
+	IN_TO_LOCAL    = 14
+	IN_END         = 19
+	OUT_RULE       = 20
+	OUT_END        = 29
+	LOCAL_IN_RULE  = 30
+	LOCAL_IN_END   = 39
+	FOR_OUT_RULE   = 40
+	FOR_OUT_END    = 49
+	END_RULE       = 65534
+
+	// 受信時の逆変換と送信時の SNAT（rules.NATOutgoingChain）で使う NAT インスタンス番号
+	NAT_INSTANCE = 1
 
 	RESTORE_FILE = "/tmp/ipfw_restore.sh"
 )
 
-func setUpIptablesCompatible() error {
+// setUpIptablesCompatible は振り分けのルールを入れる。
+// natIface は外向きインターフェース名（逆変換を受信時のこの IF に限定する）。
+func setUpIptablesCompatible(natIface string) error {
 	firstRule := []ipfw.Rule {
 		{
+			// 受信時（in）はホスト宛て・転送の区別なく共通区画に入れる。
+			// どちらかは逆変換の後でないと決まらないため。
 			Number: IN_ENTRY,
 			Action: ipfw.CallAction{RuleNumber: IN_RULE},
-			Match: ipfw.Match().NotSourceNet("me").DestNet("me").PacketDirection("in"),
+			Match: ipfw.Match().NotSourceNet("me").DestNet("any").PacketDirection("in"),
 		},
 		{
 			Number: OUT_ENTRY,
 			Action: ipfw.CallAction{RuleNumber: OUT_RULE},
 			Match: ipfw.Match().SourceNet("me").NotDestNet("me").PacketDirection("out"),
-		},
-		{
-			// 転送パケットの受信時（in）: PREROUTING 相当だけを評価する
-			Number: FOR_IN_ENTRY,
-			Action: ipfw.CallAction{RuleNumber: FOR_IN_RULE},
-			Match: ipfw.Match().NotSourceNet("me").NotDestNet("me").PacketDirection("in"),
 		},
 		{
 			// 転送パケットの送信時（out）: FORWARD → POSTROUTING 相当を評価する
@@ -1059,8 +1064,33 @@ func setUpIptablesCompatible() error {
 			Action: ipfw.CountAction{},
 			Comment: []string{"in packet"},
 		},
+		// 11: R-PREROUTING 相当、12: M-PREROUTING 相当（setUpIpfwNormal で追加）
 		{
+			// SNAT した接続の応答の逆変換（宛先をワークロードのアドレスに戻す）
+			Number: IN_REVERSE_NAT,
+			Action: ipfw.NatAction{NatNumber: NAT_INSTANCE},
+			Match: ipfw.Match().SourceNet("any").DestNet("me").PacketDirection("in").InInterface(natIface),
+		},
+		{
+			// 変換後の宛先がホストなら INPUT 相当の区画へ
+			Number: IN_TO_LOCAL,
+			Action: ipfw.SkiptoAction{RuleNumber: LOCAL_IN_RULE},
+			Match: ipfw.Match().SourceNet("any").DestNet("me"),
+		},
+		{
+			// 転送パケット: 受信時の評価はここまで（FORWARD 以降は送信時に評価する）
 			Number: IN_END,
+			Action: ipfw.SkiptoAction{RuleNumber: END_RULE},
+			Match: ipfw.Match().SourceNet("any").DestNet("any"),
+		},
+		{
+			Number: LOCAL_IN_RULE,
+			Action: ipfw.CountAction{},
+			Comment: []string{"local in packet"},
+		},
+		// 34: F-INPUT 相当（setUpIpfwNormal で追加）
+		{
+			Number: LOCAL_IN_END,
 			Action: ipfw.SkiptoAction{RuleNumber: END_RULE},
 			Match: ipfw.Match().SourceNet("any").DestNet("any"),
 		},
@@ -1071,16 +1101,6 @@ func setUpIptablesCompatible() error {
 		},
 		{
 			Number: OUT_END,
-			Action: ipfw.SkiptoAction{RuleNumber: END_RULE},
-			Match: ipfw.Match().SourceNet("any").DestNet("any"),
-		},
-		{
-			Number: FOR_IN_RULE,
-			Action: ipfw.CountAction{},
-			Comment: []string{"forward in packet"},
-		},
-		{
-			Number: FOR_IN_END,
 			Action: ipfw.SkiptoAction{RuleNumber: END_RULE},
 			Match: ipfw.Match().SourceNet("any").DestNet("any"),
 		},
@@ -1486,6 +1506,17 @@ func (d *InternalDataplane) configureKernel() {
 	err = exec.Command("sysctl", "-w", "net.inet.ip.forwarding=1").Run()
 	if err != nil {
 		log.WithError(err).Error("Failed to set IPv4 forwarding sysctl")
+	}
+
+	// ipfw nat の後も評価を続けるため one_pass を無効にする。
+	// one_pass=1（既定）では nat を実行したルールでその通過の評価が終わり、
+	// 受信時の逆変換の後に変換後の宛先で振り分けられない。
+	// one_pass=0 では nat を実行したルールの次から評価が続く（ip_fw_pfil.c の IP_FW_NAT → goto again）。
+	log.Info("Disabling ipfw one_pass so that evaluation continues after nat.")
+	err = exec.Command("sysctl", "-w", "net.inet.ip.fw.one_pass=0").Run()
+	if err != nil {
+		log.WithError(err).Error("Failed to set net.inet.ip.fw.one_pass=0; " +
+			"packets will not be dispatched after reverse NAT")
 	}
 }
 

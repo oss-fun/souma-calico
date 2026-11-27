@@ -36,6 +36,11 @@ func (r *DefaultRuleRenderer) MakeNatOutgoingRule(protocol string, action ipfw.A
 		match = match.Protocol(protocol)
 	}
 
+	// SNAT（MASQUERADE 相当）は送信時（out）の通過でだけ評価する。
+	// 受信時に評価されると、ipfw nat は逆変換として動き、送信元は書き換わらない。
+	// xmit を使う場合も out が必要（ipfw(8): "So out is required ... whenever xmit is used."）。
+	match = match.PacketDirection("out")
+
 	if r.Config.IpfwNATOutgoingInterfaceFilter != "" {
 		match = match.OutInterface(r.Config.IpfwNATOutgoingInterfaceFilter)
 	}
