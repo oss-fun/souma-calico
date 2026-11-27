@@ -586,10 +586,13 @@ func (r *DefaultRuleRenderer) StaticFilterForwardChains() []*Chain {
 
 // StaticFilterForwardAppendRules returns rules which should be statically appended to the end of the filter
 // table's forward chain.
+//
+// FORWARD 相当の処理は、転送パケットの送信時（out）の通過で評価する区画（40〜49番）に置く。
+// 番号は dataplane/freebsd/int_dataplane.go の FOR_OUT_RULE〜FOR_OUT_END の区画と合わせること。
 func (r *DefaultRuleRenderer) StaticFilterForwardAppendRules() []Rule {
 	return []Rule{
 		{
-			Number:  35,
+			Number:  45,
 			Match:   Match().Tagged(r.IpfwTagAccept),
 			Action:  r.filterAllowAction,
 			Comment: []string{},
@@ -598,7 +601,7 @@ func (r *DefaultRuleRenderer) StaticFilterForwardAppendRules() []Rule {
 		// Set IpfwTagAccept bit here, to indicate to our mangle-POSTROUTING chain that this is
 		// forwarded traffic and should not be subject to normal host endpoint policy.
 		{
-			Number: 36,
+			Number: 46,
 			Action: TagAction{TagNumber: r.IpfwTagAccept},
 		},
 	}

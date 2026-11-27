@@ -917,8 +917,10 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 	for _, t := range d.ipfwFilterRuleSet {
 		filterChains := d.ruleRenderer.StaticFilterTableChains(t.IPVersion)
 		t.UpdateChains(filterChains)
+		// FORWARD 相当は転送パケットの送信時（out）の区画で評価する。
+		// xmit は送信時にしか判定できないため（ipfw(8)）、受信時の区画には置かない。
 		ffRule := []ipfw.Rule{{
-			Number: 34,
+			Number: 44,
 			Action: ipfw.CallAction{Target: rules.ChainFilterForward},
 		}}
 		ffRule = append(ffRule, d.ruleRenderer.StaticFilterForwardAppendRules()...)
@@ -952,7 +954,8 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 				Action: ipfw.CallAction{Target: rules.ChainNATPostrouting},
 			},
 			{
-				Number: 38,
+				// 転送パケットの送信時（out）の区画
+				Number: 48,
 				Action: ipfw.CallAction{Target: rules.ChainNATPostrouting},
 			},
 		})
@@ -981,25 +984,43 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 				Action: ipfw.CallAction{Target: rules.ChainManglePostrouting},
 			},
 			{
-				Number: 37,
+				// 転送パケットの送信時（out）の区画
+				Number: 47,
 				Action: ipfw.CallAction{Target: rules.ChainManglePostrouting},
 			},
 		})
 	}
 }
 
+// iptables の各 hook に相当する処理を、IPFW のどの通過で評価するかの振り分け。
+//
+// 通常の IPv4 の転送経路では、IPFW は同じパケットを受信時（in）と送信時（out）の
+// 両方で評価し得る（ipfw(8)）。転送パケットを1つの区画にまとめると、
+// PREROUTING・FORWARD・POSTROUTING 相当の処理が両方の通過で実行されるため、
+// 転送パケットは向きで2つの区画に分ける。
+//
+//	  1 ホスト宛て（in）       → 10〜19: R/M-PREROUTING → F-INPUT
+//	  2 ホスト発（out）        → 20〜29: R-OUTPUT → F-OUTPUT → M/N-POSTROUTING
+//	  3 転送・受信時（in）     → 30〜39: R-PREROUTING → M-PREROUTING
+//	  4 転送・送信時（out）    → 40〜49: F-FORWARD → M-POSTROUTING → N-POSTROUTING
+//
+// FORWARD 相当を送信時に置くのは、xmit が送信時にしか判定できないため
+// （"the xmit interface can only be tested on outgoing packets"）。送信時でも recv は判定できる。
 const (
-	IN_ENTRY = 1
-	OUT_ENTRY = 2
-	FOR_ENTRY = 3
-	END_ENTRY = 4
-	IN_RULE = 10
-	IN_END = 19
-	OUT_RULE = 20
-	OUT_END = 29
-	FOR_RULE = 30
-	FOR_END = 39
-	END_RULE = 65534
+	IN_ENTRY      = 1
+	OUT_ENTRY     = 2
+	FOR_IN_ENTRY  = 3
+	FOR_OUT_ENTRY = 4
+	END_ENTRY     = 5
+	IN_RULE       = 10
+	IN_END        = 19
+	OUT_RULE      = 20
+	OUT_END       = 29
+	FOR_IN_RULE   = 30
+	FOR_IN_END    = 39
+	FOR_OUT_RULE  = 40
+	FOR_OUT_END   = 49
+	END_RULE      = 65534
 
 	RESTORE_FILE = "/tmp/ipfw_restore.sh"
 )
@@ -1017,9 +1038,16 @@ func setUpIptablesCompatible() error {
 			Match: ipfw.Match().SourceNet("me").NotDestNet("me").PacketDirection("out"),
 		},
 		{
-			Number: FOR_ENTRY,
-			Action: ipfw.CallAction{RuleNumber: FOR_RULE},
-			Match: ipfw.Match().NotSourceNet("me").NotDestNet("me"),
+			// 転送パケットの受信時（in）: PREROUTING 相当だけを評価する
+			Number: FOR_IN_ENTRY,
+			Action: ipfw.CallAction{RuleNumber: FOR_IN_RULE},
+			Match: ipfw.Match().NotSourceNet("me").NotDestNet("me").PacketDirection("in"),
+		},
+		{
+			// 転送パケットの送信時（out）: FORWARD → POSTROUTING 相当を評価する
+			Number: FOR_OUT_ENTRY,
+			Action: ipfw.CallAction{RuleNumber: FOR_OUT_RULE},
+			Match: ipfw.Match().NotSourceNet("me").NotDestNet("me").PacketDirection("out"),
 		},
 		{
 			Number: END_ENTRY,
@@ -1047,12 +1075,22 @@ func setUpIptablesCompatible() error {
 			Match: ipfw.Match().SourceNet("any").DestNet("any"),
 		},
 		{
-			Number: FOR_RULE,
+			Number: FOR_IN_RULE,
 			Action: ipfw.CountAction{},
-			Comment: []string{"forward packet"},
+			Comment: []string{"forward in packet"},
 		},
 		{
-			Number: FOR_END,
+			Number: FOR_IN_END,
+			Action: ipfw.SkiptoAction{RuleNumber: END_RULE},
+			Match: ipfw.Match().SourceNet("any").DestNet("any"),
+		},
+		{
+			Number: FOR_OUT_RULE,
+			Action: ipfw.CountAction{},
+			Comment: []string{"forward out packet"},
+		},
+		{
+			Number: FOR_OUT_END,
 			Action: ipfw.SkiptoAction{RuleNumber: END_RULE},
 			Match: ipfw.Match().SourceNet("any").DestNet("any"),
 		},
