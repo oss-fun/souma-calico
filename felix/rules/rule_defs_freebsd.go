@@ -430,12 +430,29 @@ func NewRenderer(config Config) RuleRenderer {
 	}
 
 	// What should we do with packets that are accepted in the forwarding chain
+	//
+	// iptables の ACCEPT は、その table / hook の処理だけを終え、次の処理段階
+	// （raw → mangle → nat → filter、FORWARD の後の POSTROUTING など）へ進む。
+	// 一方 IPFW の allow はその通過の評価全体を終える（ipfw(8): "The search terminates."）。
+	// allow のままだと、mangle PREROUTING 相当の後の逆変換 NAT や、
+	// filter の後の POSTROUTING 相当の SNAT が実行されない。
+	//
+	// そのため、Calico のチェインの ACCEPT は RETURN で再現し、現在の処理段階だけを終える。
+	// 許可の判定結果は Accept の tag で後続の段階に伝える
+	// （本家の IptablesFilterAllowAction / IptablesMangleAllowAction = RETURN と同じ仕組み）。
+	// 評価の最後は、各区画の skipto 65534 から 65534 / 65535 のルールで終える。
 	var filterAllowAction, mangleAllowAction ipfw.Action
-	log.Info("filter table allowed packets will be accepted immediately.")
-	filterAllowAction = ipfw.AllowAction{}
+	if config.IpfwFilterAllowAction != "RETURN" || config.IpfwMangleAllowAction != "RETURN" {
+		log.WithFields(log.Fields{
+			"IpfwFilterAllowAction": config.IpfwFilterAllowAction,
+			"IpfwMangleAllowAction": config.IpfwMangleAllowAction,
+		}).Info("ACCEPT is rendered as RETURN on IPFW so that later stages (NAT, POSTROUTING) still run.")
+	}
+	log.Info("filter table allowed packets will be returned to the next stage.")
+	filterAllowAction = ipfw.ReturnAction{}
 
-	log.Info("mangle table allowed packets will be accepted immediately.")
-	mangleAllowAction = ipfw.AllowAction{}
+	log.Info("mangle table allowed packets will be returned to the next stage.")
+	mangleAllowAction = ipfw.ReturnAction{}
 
 	// How should we block CIDRs for loop prevention?
 	var blockCIDRAction ipfw.Action

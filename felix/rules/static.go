@@ -588,15 +588,13 @@ func (r *DefaultRuleRenderer) StaticFilterForwardChains() []*Chain {
 //
 // FORWARD 相当の処理は、転送パケットの送信時（out）の通過で評価する区画（40〜49番）に置く。
 // 番号は dataplane/freebsd/int_dataplane.go の FOR_OUT_RULE〜FOR_OUT_END の区画と合わせること。
+//
+// 本家はここで「Accept の印があれば ACCEPT」を置くが、iptables の ACCEPT は filter FORWARD を
+// 終えるだけで、その後 POSTROUTING（SNAT）へ進む。IPFW でこの区画（call 40 の呼び出し先）に
+// allow や return を置くと、POSTROUTING 相当（47・48）に届かずに評価が終わるため置かない。
+// Accept の有無にかかわらず、この後の POSTROUTING 相当へ進む。
 func (r *DefaultRuleRenderer) StaticFilterForwardAppendRules() []Rule {
 	return []Rule{
-		{
-			Number:  45,
-			Match:   Match().Tagged(r.IpfwTagAccept),
-			Action:  r.filterAllowAction,
-			Comment: []string{},
-		},
-
 		// Set IpfwTagAccept bit here, to indicate to our mangle-POSTROUTING chain that this is
 		// forwarded traffic and should not be subject to normal host endpoint policy.
 		{
@@ -889,8 +887,10 @@ func (r *DefaultRuleRenderer) StaticRawPreroutingChain(ipVersion uint8) *Chain {
 		// Then, if the packet was marked as allowed, accept it.  Packets also return here
 		// without the mark bit set if the interface wasn't one that we're policing.  We
 		// let those packets fall through to the user's policy.
+		// raw の ACCEPT は raw の処理だけを終える（mangle・逆変換 NAT・filter は続く）。
+		// Accept の tag は後続の段階（M-PREROUTING / F-INPUT）が参照する。
 		Rule{Match: Match().Tagged(r.IpfwTagAccept),
-			Action: AllowAction{}},
+			Action: ReturnAction{}},
 	)
 
 	result := &Chain{
@@ -938,17 +938,18 @@ func (r *DefaultRuleRenderer) StaticRawOutputChain(tcBypassTag uint16) *Chain {
 		// return here without the mark bit set if the interface wasn't one that
 		// we're policing.
 	}...)
+	// raw の ACCEPT は raw の処理だけを終える（filter OUTPUT・POSTROUTING 相当の SNAT は続く）。
 	if tcBypassTag == 0 {
 		rules = append(rules, []Rule{
 			{Match: Match().Tagged(r.IpfwTagAccept),
-				Action: AllowAction{}},
+				Action: ReturnAction{}},
 		}...)
 	} else {
 		rules = append(rules, []Rule{
 			{Match: Match().Tagged(r.IpfwTagAccept),
 				Action: TagAction{TagNumber: tcBypassTag}},
 			{Match: Match().Tagged(tcBypassTag),
-				Action: AllowAction{}},
+				Action: ReturnAction{}},
 		}...)
 	}
 	result := &Chain{
