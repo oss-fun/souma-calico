@@ -495,5 +495,9 @@ func AddTableNameToChainName(table, chainName string) string {
 		return chainName
 	}
 	insertPos := pos + len(ChainNamePrefix)
+	if strings.HasPrefix(chainName[insertPos:], prefix) {
+		// すでにテーブル名が付いている（例: cali-F-...）。二重に付けない。
+		return chainName
+	}
 	return chainName[:insertPos] + prefix + chainName[insertPos:]
 }

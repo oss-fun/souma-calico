@@ -361,6 +361,10 @@ func (r *DefaultRuleRenderer) endpointTagDispatchChains(
 
 	log.WithField("ifaceNames", append(wlNames, hepNames...)).Debug("Rendering endpoint tag dispatch chains")
 
+	// root チェインもテーブル名付きの名前にする（buildSingleDispatchChains が作る子チェインと揃える）。
+	dispatchSetTagEndpointChainName = AddTableNameToChainName(table, dispatchSetTagEndpointChainName)
+	dispatchFromTagEndpointChainName = AddTableNameToChainName(table, dispatchFromTagEndpointChainName)
+
 	// start rendering set tag rules.
 	rootSetTagRules := make([]Rule, 0)
 	chains := make([]*Chain, 0)
@@ -487,6 +491,14 @@ func (r *DefaultRuleRenderer) buildSingleDispatchChains(
 	getActionForEndpoint func(pfx, name string) Action,
 	endRules []Rule,
 ) ([]*Chain, *Chain, []Rule) {
+
+	// dispatch チェインの名前にテーブル名（filter なら F-）を付ける。
+	// 呼び出し側（static.go）は ChainFilterFromWorkloadDispatch などテーブル名付きの名前で
+	// call / skipto するが、呼び出し元はテーブル名なしの定数（ChainFromWorkloadDispatch など）を渡している。
+	// 名前が一致しないと、RuleSet は生成したチェインを「参照されていない」と判断して反映せず、
+	// その先のワークロード用チェインにも参照数が伝わらない。
+	// 子チェインの名前（chainName + "-" + 文字）もここで付けた名前から作る。
+	chainName = AddTableNameToChainName(table, chainName)
 
 	childChains := make([]*Chain, 0)
 	rootRules := make([]Rule, 0)
