@@ -33,6 +33,34 @@ func (m MatchCriteria) NotTagged(tag uint16) MatchCriteria {
 	return append(m, fmt.Sprintf("not tagged %d", tag))
 }
 
+// IPFW の tag はビットではなく番号なので、複数の tag を OR でまとめてはいけない
+// （例: Accept=1, Pass=2 の OR は 3 になり、別の tag の番号になる）。
+// 複数の tag は、ipfw の tag-list（"tagged 1,2"）で指定する。
+// ipfw(8): "tagged tag-list: Matches packets whose tags are included in tag-list"
+
+// TaggedAnyOf は、tags のどれか1つでも付いていれば一致する（OR）。
+// 本家 iptables の MarkNotClear(A | B) に相当する。
+func (m MatchCriteria) TaggedAnyOf(tags ...uint16) MatchCriteria {
+	return append(m, fmt.Sprintf("tagged %s", tagList(tags)))
+}
+
+// NotTaggedAnyOf は、tags がどれも付いていなければ一致する（すべて「なし」の AND）。
+// 本家 iptables の MarkClear(A | B) に相当する。
+func (m MatchCriteria) NotTaggedAnyOf(tags ...uint16) MatchCriteria {
+	return append(m, fmt.Sprintf("not tagged %s", tagList(tags)))
+}
+
+func tagList(tags []uint16) string {
+	if len(tags) == 0 {
+		log.Fatalf("tagList: no tags given")
+	}
+	parts := make([]string, len(tags))
+	for i, t := range tags {
+		parts[i] = fmt.Sprintf("%d", t)
+	}
+	return strings.Join(parts, ",")
+}
+
 func (m MatchCriteria) Protocol(p interface{}) MatchCriteria {
 	switch proto := p.(type) {
 	case int:

@@ -321,8 +321,9 @@ func (r *DefaultRuleRenderer) PolicyGroupToIpfwChains(group *PolicyGroup) []*Cha
 			// chain has a similar rule that only checks the accept bit.  Pass
 			// is handled differently in the per-endpoint chain because we need
 			// to continue processing in the same chain on a pass rule.
+			// 本家: MarkNotClear(Pass | Accept) = Pass か Accept のどちらかがある（OR）
 			rules = append(rules, Rule{
-				Match:   Match().Tagged(r.IpfwTagPass | r.IpfwTagAccept),
+				Match:   Match().TaggedAnyOf(r.IpfwTagPass, r.IpfwTagAccept),
 				Action:  ReturnAction{},
 				Comment: []string{"Return on verdict"},
 			})
@@ -336,7 +337,8 @@ func (r *DefaultRuleRenderer) PolicyGroupToIpfwChains(group *PolicyGroup) []*Cha
 		} else {
 			// We're not the first rule in a block, only jump to this policy if
 			// the previous policy didn't set a mark bit.
-			match = Match().Tagged(r.IpfwTagPass | r.IpfwTagAccept)
+			// 本家: MarkClear(Pass | Accept) = Pass も Accept もない（AND）
+			match = Match().NotTaggedAnyOf(r.IpfwTagPass, r.IpfwTagAccept)
 		}
 
 		chainToJumpTo := PolicyChainName(
@@ -412,11 +414,8 @@ func (r *DefaultRuleRenderer) endpointIpfwChain(
 	// Start by ensuring that the policy result bits are clear.  Policy chains
 	// set one of the bits to return their result (or leave the bits unset if
 	// there's no match).
-	rules = append(rules, Rule{
-		Action: TagAction{
-			TagNumber: r.IpfwTagAccept | r.IpfwTagPass,
-		},
-	})
+	// 本家: ClearMarkAction{Accept | Pass}。Accept と Pass をそれぞれ消し、ほかの tag は変えない。
+	rules = append(rules, untagRules(r.IpfwTagAccept, r.IpfwTagPass)...)
 
 	if len(policyGroups) > 0 {
 		// Then, jump to each policy (or group) in turn.
@@ -437,8 +436,9 @@ func (r *DefaultRuleRenderer) endpointIpfwChain(
 
 			for _, chainToJumpTo := range chainsToJumpTo {
 				// If a previous policy/group didn't set the "pass" mark, jump to the policy.
+				// 本家: MarkClear(Pass) = Pass がない
 				rules = append(rules, Rule{
-					Match:  Match().Tagged(r.IpfwTagPass),
+					Match:  Match().NotTagged(r.IpfwTagPass),
 					Action: CallAction{Target: chainToJumpTo},
 				})
 				// If policy marked packet as accepted, it returns, setting the accept
@@ -466,8 +466,9 @@ func (r *DefaultRuleRenderer) endpointIpfwChain(
 			//
 			// For untracked and pre-DNAT rules, we don't do that because there may be
 			// normal rules still to be applied to the packet in the filter table.
+			// 本家: MarkClear(Pass) = どのポリシーも Pass を付けなかった
 			rules = append(rules, Rule{
-				Match:   Match().Tagged(r.IpfwTagPass),
+				Match:   Match().NotTagged(r.IpfwTagPass),
 				Action:  r.IpfwFilterDenyAction(),
 				Comment: []string{fmt.Sprintf("%s if no policies passed packet", r.IpfwFilterDenyAction())},
 			})

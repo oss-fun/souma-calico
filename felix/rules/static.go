@@ -225,10 +225,8 @@ func (r *DefaultRuleRenderer) filterInputChain(ipVersion uint8) *Chain {
 	inputRules = append(inputRules, r.acceptAlreadyAccepted()...)
 
 	// Apply host endpoint policy.
+	inputRules = append(inputRules, untagRules(r.allCalicoTags()...)...)
 	inputRules = append(inputRules,
-		Rule{
-			Action: UntagAction{TagNumber: r.allCalicoTagNum()},
-		},
 		Rule{
 			Action: CallAction{Target: ChainFilterDispatchFromHostEndpoint},
 		},
@@ -528,16 +526,16 @@ func (r *DefaultRuleRenderer) StaticFilterForwardChains() []*Chain {
 	// and were returned.
 
 	// Jump to from-host-endpoint dispatch chains.
+	// we're clearing all our mark bits to minimise non-determinism caused by rules in other chains.
+	// We exclude the accept bit because we use that to communicate from the raw/pre-dnat chains.
+	// （本家: ClearMarkAction{allCalicoMarkBits() &^ IptablesMarkAccept}）
+	rules = append(rules, untagRules(r.IpfwTagPass, r.IpfwTagScratch0, r.IpfwTagScratch1)...)
 	rules = append(rules,
-		Rule{
-			// we're clearing all our mark bits to minimise non-determinism caused by rules in other chains.
-			// We exclude the accept bit because we use that to communicate from the raw/pre-dnat chains.
-			Action: UntagAction{TagNumber: r.IpfwTagAccept},
-		},
 		Rule{
 			// Apply forward policy for the incoming Host endpoint if accept bit is clear which means the packet
 			// was not accepted in a previous raw or pre-DNAT chain.
-			Match:  Match().Tagged(r.IpfwTagAccept),
+			// （本家: MarkClear(IptablesMarkAccept)）
+			Match:  Match().NotTagged(r.IpfwTagAccept),
 			Action: CallAction{Target: ChainFilterDispatchFromHostEndPointForward},
 		},
 	)
@@ -649,10 +647,8 @@ func (r *DefaultRuleRenderer) filterOutputChain(ipVersion uint8) *Chain {
 	// on the new destination IP, but that hasn't happened yet.  Instead, in the DNAT case, we
 	// apply host endpoint in the mangle POSTROUTING chain; see StaticManglePostroutingChain for
 	// that.
+	rules = append(rules, untagRules(r.allCalicoTags()...)...)
 	rules = append(rules,
-		Rule{
-			Action: UntagAction{TagNumber: r.allCalicoTagNum()},
-		},
 		Rule{
 			Match:  Match(),
 			Action: CallAction{Target: ChainFilterDispatchToHostEndpoint},
@@ -838,10 +834,8 @@ func (r *DefaultRuleRenderer) StaticManglePostroutingChain(ipVersion uint8) *Cha
 	// does not recalculate the outgoing interface (OIF) until AFTER the filter-OUTPUT chain.
 	// The OIF has been recalculated by the time we hit THIS chain (mangle-POSTROUTING), so we
 	// can reliably apply host endpoint policy here.
+	rules = append(rules, untagRules(r.allCalicoTags()...)...)
 	rules = append(rules,
-		Rule{
-			Action: UntagAction{TagNumber: r.allCalicoTagNum()},
-		},
 		Rule{
 			Match:  Match().ConntrackState("established"), // DNAT
 			Action: CallAction{Target: ChainMangleDispatchToHostEndpoint},
@@ -877,9 +871,7 @@ func (r *DefaultRuleRenderer) StaticRawPreroutingChain(ipVersion uint8) *Chain {
 
 	// For safety, clear all our mark bits before we start.  (We could be in append mode and
 	// another process' rules could have left the mark bit set.)
-	rules = append(rules,
-		Rule{Action: UntagAction{TagNumber: r.allCalicoTagNum()}},
-	)
+	rules = append(rules, untagRules(r.allCalicoTags()...)...)
 
 	// Set a mark on the packet if it's from a workload interface.
 	tagFromWorkload := r.IpfwTagScratch0
@@ -911,24 +903,41 @@ func (r *DefaultRuleRenderer) StaticRawPreroutingChain(ipVersion uint8) *Chain {
 	return result
 }
 
-func (r *DefaultRuleRenderer) allCalicoTagNum() uint16 {
-	return r.IpfwTagAccept |
-		r.IpfwTagPass |
-		r.IpfwTagScratch0 |
-		r.IpfwTagScratch1
+// allCalicoTags は、本家の allCalicoMarkBits() が返す4種類
+// （Accept・Pass・Scratch0・Scratch1）に対応する tag を返す。
+// IPFW の tag はビットではなく番号なので、OR でまとめずに個別に扱う。
+// 移植で追加する tag（Endpoint など）は含めない。
+func (r *DefaultRuleRenderer) allCalicoTags() []uint16 {
+	return []uint16{
+		r.IpfwTagAccept,
+		r.IpfwTagPass,
+		r.IpfwTagScratch0,
+		r.IpfwTagScratch1,
+	}
+}
+
+// untagRules は tags をそれぞれ消すルールを返す。
+// ipfw の untag は1つの番号しか取れないため、tag ごとに1ルールにする。
+// 本家 iptables の ClearMarkAction{Mark: A | B | ...} に相当する。
+func untagRules(tags ...uint16) []Rule {
+	rules := make([]Rule, 0, len(tags))
+	for _, t := range tags {
+		rules = append(rules, Rule{Action: UntagAction{TagNumber: t}})
+	}
+	return rules
 }
 
 func (r *DefaultRuleRenderer) StaticRawOutputChain(tcBypassTag uint16) *Chain {
-	rules := []Rule{
-		// For safety, clear all our mark bits before we start.  (We could be in
-		// append mode and another process' rules could have left the mark bit set.)
-		{Action: UntagAction{TagNumber: r.allCalicoTagNum()}},
+	// For safety, clear all our mark bits before we start.  (We could be in
+	// append mode and another process' rules could have left the mark bit set.)
+	rules := untagRules(r.allCalicoTags()...)
+	rules = append(rules, []Rule{
 		// Then, jump to the untracked policy chains.
 		{Action: CallAction{Target: ChainRawDispatchToHostEndpoint}},
 		// Then, if the packet was marked as allowed, accept it.  Packets also
 		// return here without the mark bit set if the interface wasn't one that
 		// we're policing.
-	}
+	}...)
 	if tcBypassTag == 0 {
 		rules = append(rules, []Rule{
 			{Match: Match().Tagged(r.IpfwTagAccept),
