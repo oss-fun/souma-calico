@@ -132,6 +132,27 @@ func (r *DefaultRuleRenderer) stageTags() []uint16 {
 	}
 }
 
+// passStartTags は、受信時とホスト発の通過の最初（raw の PREROUTING / OUTPUT 相当）で消す tag を返す。
+// Calico の tag と段階間の tag に加えて、Untracked の tag も消す。
+// Untracked は転送の送信時（F-FORWARD 相当）には消さない。受信時の raw で付けた「追跡しない」を
+// 送信時の状態の記録まで持ち越すため（本家の NOTRACK が接続の追跡全体に効くのと同じ）。
+func (r *DefaultRuleRenderer) passStartTags() []uint16 {
+	tags := append(r.allCalicoTags(), r.stageTags()...)
+	return append(tags, r.IpfwTagUntracked)
+}
+
+// untrackedReturnRule は、raw の untracked ポリシーで許可した（Accept の tag がある）パケットに
+// Untracked の tag を付けて raw の段階を終えるルールを返す。
+// 本家は raw で NOTRACK と ACCEPT をする。IPFW には NOTRACK がないため、Untracked の tag で
+// filter の段階に「状態を記録しない」ことを伝える（filterInputChain、StaticFilterForwardChains）。
+func (r *DefaultRuleRenderer) untrackedReturnRule() Rule {
+	return Rule{
+		Match:   Match().Tagged(r.IpfwTagAccept),
+		Action:  ReturnTagAction{TagNumber: r.IpfwTagUntracked},
+		Comment: []string{"Untracked policy accepted"},
+	}
+}
+
 // Forward check chain is to check if a packet belongs to a forwarded traffic or not.
 // With kube-proxy running in ipvs mode, both local or forwarded traffic goes through INPUT filter chain.
 func (r *DefaultRuleRenderer) StaticFilterInputForwardCheckChain(ipVersion uint8) *Chain {
@@ -304,7 +325,21 @@ func (r *DefaultRuleRenderer) filterInputChain(ipVersion uint8) *Chain {
 	// Now we only have ingress host endpoint processing to do.  The ingress host endpoint may
 	// have already accepted this packet in the raw or mangle table.  In that case, accept the
 	// packet immediately here too.
-	inputRules = append(inputRules, r.acceptAlreadyAccepted()...)
+	//
+	// 許可の仕方で、状態を記録するかを分ける（INPUT 相当のすべての許可の経路が、追跡する接続なら
+	// 記録を通るようにする）。
+	//   - raw の untracked ポリシーで許可（Untracked の tag）: 本家は NOTRACK で追跡しないので、記録せずに戻る。
+	//   - mangle の pre-DNAT ポリシーで許可（Accept の tag のみ）: 本家は conntrack が追跡するので、
+	//     記録してから戻る。記録しないと、ホストの応答が OUTPUT 相当の check-state に一致せず、
+	//     通常の egress ポリシーで拒否され得る。
+	inputRules = append(inputRules,
+		Rule{
+			Match:   Match().Tagged(r.IpfwTagUntracked),
+			Action:  r.filterAllowAction,
+			Comment: []string{"Allow untracked policy accepted"},
+		},
+		r.recordStateRule(Match().Tagged(r.IpfwTagAccept), "Record state: pre-DNAT allowed"),
+	)
 
 	// Apply host endpoint policy.
 	inputRules = append(inputRules, untagRules(append(r.allCalicoTags(), r.IpfwTagFailsafe)...)...)
@@ -681,7 +716,8 @@ func (r *DefaultRuleRenderer) StaticFilterForwardChains() []*Chain {
 	// 送信元・宛先のエンドポイントのポリシーをすべて通過して許可された。ここで接続を記録する。
 	// 以後の同じ接続（両方向）は、入口の check-state で FORWARD 相当の検査を省く。
 	rules = append(rules,
-		r.recordStateRule(Match().Tagged(r.IpfwTagAccept), "Record state: forward allowed"),
+		// raw の untracked ポリシーで許可した転送（Untracked の tag）は、本家と同じく追跡しない。
+		r.recordStateRule(Match().Tagged(r.IpfwTagAccept).NotTagged(r.IpfwTagUntracked), "Record state: forward allowed"),
 	)
 
 	results := []*Chain{{
@@ -994,7 +1030,7 @@ func (r *DefaultRuleRenderer) StaticRawPreroutingChain(ipVersion uint8) *Chain {
 	// For safety, clear all our mark bits before we start.  (We could be in append mode and
 	// another process' rules could have left the mark bit set.)
 	// 受信時の通過の最初の段階なので、移植で追加した段階間の tag も消す（stageTags）。
-	rules = append(rules, untagRules(append(r.allCalicoTags(), r.stageTags()...)...)...)
+	rules = append(rules, untagRules(r.passStartTags()...)...)
 
 	// Set a mark on the packet if it's from a workload interface.
 	tagFromWorkload := r.IpfwTagScratch0
@@ -1042,8 +1078,9 @@ func (r *DefaultRuleRenderer) StaticRawPreroutingChain(ipVersion uint8) *Chain {
 		// let those packets fall through to the user's policy.
 		// raw の ACCEPT は raw の処理だけを終える（mangle・逆変換 NAT・filter は続く）。
 		// Accept の tag は後続の段階（M-PREROUTING / F-INPUT）が参照する。
-		Rule{Match: Match().Tagged(r.IpfwTagAccept),
-			Action: ReturnAction{}},
+		// 本家はここで NOTRACK も付け、接続を追跡しない。IPFW では Untracked の tag を付けて、
+		// filter の段階が状態を記録しないようにする（untrackedReturnRule）。
+		r.untrackedReturnRule(),
 	)
 
 	result := &Chain{
@@ -1120,7 +1157,7 @@ func (r *DefaultRuleRenderer) StaticRawOutputChain(tcBypassTag uint16) *Chain {
 	// For safety, clear all our mark bits before we start.  (We could be in
 	// append mode and another process' rules could have left the mark bit set.)
 	// ホスト発の通過の最初の段階なので、移植で追加した段階間の tag も消す（stageTags）。
-	rules := untagRules(append(r.allCalicoTags(), r.stageTags()...)...)
+	rules := untagRules(r.passStartTags()...)
 	rules = append(rules, []Rule{
 		// Then, jump to the untracked policy chains.
 		{Action: CallAction{Target: ChainRawDispatchToHostEndpoint}},
@@ -1131,11 +1168,9 @@ func (r *DefaultRuleRenderer) StaticRawOutputChain(tcBypassTag uint16) *Chain {
 		// we're policing.
 	}...)
 	// raw の ACCEPT は raw の処理だけを終える（filter OUTPUT・POSTROUTING 相当の SNAT は続く）。
+	// 本家と同じく追跡しない接続なので、Untracked の tag も付ける（untrackedReturnRule）。
 	if tcBypassTag == 0 {
-		rules = append(rules, []Rule{
-			{Match: Match().Tagged(r.IpfwTagAccept),
-				Action: ReturnAction{}},
-		}...)
+		rules = append(rules, r.untrackedReturnRule())
 	} else {
 		rules = append(rules, []Rule{
 			{Match: Match().Tagged(r.IpfwTagAccept),

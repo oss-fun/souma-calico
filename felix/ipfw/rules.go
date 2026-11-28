@@ -138,7 +138,11 @@ func renderComment(comments []string, prefixFragment string) string {
 	}
 }
 
-var shellUnsafe = regexp.MustCompile(`[^\w @%+=:,./#-]`)
+// shellUnsafe は、コメントに残すとシェルに解釈される文字（許可する文字以外）に一致する。
+// # は語の先頭にあるとシェルのコメントになり、それ以降（ハッシュのコメントを含む）が捨てられる。
+// コマンド自体は成功するため set -e でも検出できず、ハッシュのないルールが管理対象から漏れる。
+// そのため # も許可しない。
+var shellUnsafe = regexp.MustCompile(`[^\w @%+=:,./-]`)
 
 func escapeComment(s string) string {
 	return shellUnsafe.ReplaceAllString(s, "_")

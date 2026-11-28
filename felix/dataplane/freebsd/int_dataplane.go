@@ -939,7 +939,8 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 	for _, t := range d.ipfwNATRuleSet {
 		t.UpdateChains(d.ruleRenderer.StaticNATTableChains(t.IPVersion))
 		// N-PREROUTING 相当（宛先 NAT）を有効にする場合は、受信時の共通区画で
-		// M-PREROUTING（12）の後、逆変換（IN_REVERSE_NAT = 13）の前後の順序を設計してから置くこと。
+		// 逆変換（IN_REVERSE_NAT = 12）と M-PREROUTING（13）との順序を設計してから置くこと。
+		// pre-DNAT ポリシー（M-PREROUTING）は、新規の接続を宛先 NAT の前の宛先で評価する必要がある。
 		/*
 		t.InsertOrAppendRules("N-PREROUTING", []ipfw.Rule{
 			{
@@ -968,10 +969,11 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 	}
 	for _, t := range d.ipfwMangleRuleSet {
 		t.UpdateChains(d.ruleRenderer.StaticMangleTableChains(t.IPVersion))
-		// 受信時の共通区画で1回だけ評価する（ホスト宛て・転送の両方を含む）
+		// 受信時の共通区画で1回だけ評価する（ホスト宛て・転送の両方を含む）。
+		// 逆変換（IN_REVERSE_NAT = 12）の後に置く。理由は IN_REVERSE_NAT の説明を参照。
 		t.InsertOrAppendRules("M-PREROUTING", []ipfw.Rule{
 			{
-				Number: 12,
+				Number: IN_MANGLE_PREROUTING,
 				Action: ipfw.CallAction{Target: rules.ChainManglePrerouting},
 			},
 		})
@@ -994,17 +996,29 @@ func (d *InternalDataplane) setUpIpfwNormal() {
 // 通常の IPv4 の転送経路では、IPFW は同じパケットを受信時（in）と送信時（out）の
 // 両方で評価し得る（ipfw(8)）。そのため、受信時と送信時で区画を分ける。
 //
-//	1 受信時（in）の共通 → 10〜19: R-PREROUTING → M-PREROUTING → 逆変換（nat）
+//	1 受信時（in）の共通 → 10〜19: R-PREROUTING(11) → 逆変換 nat(12) → M-PREROUTING(13)
 //	                                → 変換後の宛先がホストなら 30 へ、そうでなければ受信時の評価を終了
 //	                     → 30〜39: INPUT 相当（F-INPUT）
 //	2 ホスト発（out）    → 20〜29: R-OUTPUT → F-OUTPUT → M/N-POSTROUTING
 //	3 転送・送信時（out）→ 40〜49: F-FORWARD → M-POSTROUTING → N-POSTROUTING（SNAT）
 //
-// 逆変換を raw / mangle PREROUTING 相当の後に置くのは、Linux の PREROUTING で
-// mangle（NF_IP_PRI_MANGLE = -150）が宛先 NAT（NF_IP_PRI_NAT_DST = -100）より先に動き、
-// Calico の pre-DNAT ポリシーが変換前の宛先で評価されるため。
+// 逆変換（SNAT した接続の応答の宛先をワークロードに戻す）の位置:
+//   - raw PREROUTING 相当の後に置く。Linux の raw（-300）は conntrack と NAT より前で、
+//     untracked のポリシーは変換前の宛先で評価されるため。
+//   - mangle PREROUTING 相当（check-state と pre-DNAT ポリシー）の前に置く。
+//     接続の状態は FORWARD 相当の最後（SNAT の前）に、ワークロードのアドレスで記録している。
+//     応答を変換前の宛先（ホストの NAT 用アドレス）のまま照合すると一致せず、pre-DNAT ポリシーが
+//     新規の着信として評価してしまう（新規の着信を拒否するポリシーがあると応答が落ちる）。
+//     Linux では、SNAT の応答は conntrack で ESTABLISHED と判定され、mangle で許可されて
+//     pre-DNAT ポリシーには届かない。逆変換してから照合すれば、同じく記録済みの接続として扱える。
+//   - 逆変換で宛先が変わるのは、SNAT した接続の応答（libalias の変換に当たるもの）だけである。
+//     ほかの着信は libalias が書き換えないため（NAT インスタンスは redirect も deny_in も使わない。
+//     rules.StaticNATConfig）、新規の接続の pre-DNAT ポリシーは今までどおり変換前の宛先で評価される。
+//   - 制限: 動的ルールが寿命で消えた後も libalias の変換が残っている応答は、変換後の宛先で
+//     pre-DNAT ポリシーに評価される（TCP の確立済みは動的ルールが net.inet.ip.fw.dyn_ack_lifetime、
+//     既定 300 秒、libalias は 86400 秒）。
 // 逆変換の後は、net.inet.ip.fw.one_pass=0（configureKernel で設定）により
-// nat ルールの次（IN_TO_LOCAL）から評価が続き、変換後の宛先で振り分けられる。
+// nat ルールの次（IN_MANGLE_PREROUTING）から、変換後のパケットで評価が続く。
 //
 // FORWARD 相当を送信時に置くのは、xmit が送信時にしか判定できないため
 // （"the xmit interface can only be tested on outgoing packets"）。送信時でも recv は判定できる。
@@ -1014,7 +1028,9 @@ const (
 	FOR_OUT_ENTRY  = 3
 	END_ENTRY      = 4
 	IN_RULE        = 10
-	IN_REVERSE_NAT = 13
+	IN_REVERSE_NAT = 12
+	// M-PREROUTING 相当（setUpIpfwNormal で追加）
+	IN_MANGLE_PREROUTING = 13
 	IN_TO_LOCAL    = 14
 	IN_END         = 19
 	OUT_RULE       = 20
@@ -1073,13 +1089,14 @@ func setUpIptablesCompatible(natIface string) error {
 			Action: ipfw.CountAction{},
 			Comment: []string{"in packet"},
 		},
-		// 11: R-PREROUTING 相当、12: M-PREROUTING 相当（setUpIpfwNormal で追加）
+		// 11: R-PREROUTING 相当（setUpIpfwNormal で追加）
 		{
 			// SNAT した接続の応答の逆変換（宛先をワークロードのアドレスに戻す）
 			Number: IN_REVERSE_NAT,
 			Action: ipfw.NatAction{NatNumber: NAT_INSTANCE},
 			Match: ipfw.Match().SourceNet("any").DestNet("me").PacketDirection("in").InInterface(natIface),
 		},
+		// 13: M-PREROUTING 相当（setUpIpfwNormal で追加）
 		{
 			// 変換後の宛先がホストなら INPUT 相当の区画へ
 			Number: IN_TO_LOCAL,

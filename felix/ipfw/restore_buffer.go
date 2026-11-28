@@ -135,7 +135,9 @@ func addChainToIpfw(chainName string) {
 // Panics if there is no open transaction.
 func (b *RestoreInputBuilder) WriteLine(line string) {
 	b.maybeWriteTransactionOpener()
-	b.writeFormattedLine(line)
+	// line は書式ではなく値として渡す。ルールのコメントに % があると、書式指定として解釈されて
+	// 壊れる（例: 100% が 100%!/(MISSING) になる）。
+	b.writeFormattedLine("%s", line)
 }
 
 // GetBytesAndReset returns the contents of the buffer and, as a side effect, resets the buffer.  For performance,

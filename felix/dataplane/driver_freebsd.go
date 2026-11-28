@@ -80,9 +80,11 @@ func StartDataplaneDriver(configParams *config.Config,
 		// 移植で追加する tag（本家の mark にはない）。既存の番号を変えないよう、後ろに割り当てる。
 		//   Failsafe:    failsafe で許可したことを、呼び出し元の段階（raw / mangle / filter）に伝える
 		//   Established: 記録済みの接続（check-state で一致）であることを、同じ通過の後続の段階に伝える
+		//   Untracked:   raw の untracked ポリシーで許可した（本家の NOTRACK）ことを、filter の段階に伝える
 		tagFailsafe, _ := tagNumManager.NextTagNum()
 		tagEstablished, _ := tagNumManager.NextTagNum()
-		if tagEndpointMark == 0 || tagFailsafe == 0 || tagEstablished == 0 {
+		tagUntracked, _ := tagNumManager.NextTagNum()
+		if tagEndpointMark == 0 || tagFailsafe == 0 || tagEstablished == 0 || tagUntracked == 0 {
 			log.WithFields(log.Fields{
 				"Name": "felix-ipfw",
 			}).Panic("Not enough tag numbers available.")
@@ -90,6 +92,7 @@ func StartDataplaneDriver(configParams *config.Config,
 		log.WithFields(log.Fields{
 			"failsafeTag":        tagFailsafe,
 			"establishedTag":     tagEstablished,
+			"untrackedTag":       tagUntracked,
 			"acceptTag":          tagAccept,
 			"passTag":            tagPass,
 			"scratch0Tag":        tagScratch0,
@@ -154,6 +157,7 @@ func StartDataplaneDriver(configParams *config.Config,
 				IpfwTagNonCaliEndpoint: tagEndpointNonCaliEndpoint,
 				IpfwTagFailsafe:        tagFailsafe,
 				IpfwTagEstablished:     tagEstablished,
+				IpfwTagUntracked:       tagUntracked,
 
 				VXLANEnabled:   configParams.Encapsulation.VXLANEnabled,
 				VXLANEnabledV6: configParams.Encapsulation.VXLANEnabledV6,

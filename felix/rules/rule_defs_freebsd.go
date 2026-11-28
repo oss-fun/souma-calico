@@ -353,6 +353,9 @@ type Config struct {
 	IpfwTagFailsafe uint16
 	// IpfwTagEstablished は、記録済みの接続（check-state :calico で一致）であることを示す。
 	IpfwTagEstablished uint16
+	// IpfwTagUntracked は、raw の untracked（doNotTrack）ポリシーで許可したことを示す。
+	// 本家の NOTRACK に当たり、filter の段階はこの tag があれば接続の状態を記録しない。
+	IpfwTagUntracked uint16
 
 	OpenStackMetadataIP          net.IP
 	OpenStackMetadataPort        uint16
