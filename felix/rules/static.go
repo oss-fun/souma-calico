@@ -332,10 +332,23 @@ func (r *DefaultRuleRenderer) filterWorkloadToHostChain(ipVersion uint8) *Chain 
 		Action: CallAction{Target: ChainFilterFromWorkloadDispatch},
 	})
 
-	// skipto対象chainとしての処理
-	rules = append(rules, Rule{
-		Action: SkiptoAction{RuleNumber: 65534},
-	})
+	// If the dispatch chain accepts the packet, it returns to us here.  Apply the configured
+	// action.  Note: we may have done work above to allow the packet and then end up dropping
+	// it here.  We can't optimize that away because there may be other rules (such as log
+	// rules in the policy).
+	//
+	// 本家と同じく DefaultEndpointToHostAction（既定 DROP）に応じた動作で終える
+	// （以前は skipto 65534 を固定で置き、設定に関係なく許可していた）。
+	//   DROP   → deny
+	//   ACCEPT → allow（INPUT 相当は受信時の最後の段階なので、ここで評価を終えてよい）
+	//   RETURN → return。このチェインには cali-F-INPUT（34番の call 先）から skipto で来るため、
+	//            return は 34番の call の次へ戻り、INPUT 相当の残り（39番 → 65534 / 65535）で評価を終える。
+	for _, action := range r.inputAllowActions {
+		rules = append(rules, Rule{
+			Action:  action,
+			Comment: []string{"Configured DefaultEndpointToHostAction"},
+		})
+	}
 
 	result := &Chain{
 		Name:  ChainFilterWorkloadToHost,

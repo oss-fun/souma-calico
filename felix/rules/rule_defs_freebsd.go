@@ -416,6 +416,8 @@ func NewRenderer(config Config) RuleRenderer {
 
 	// Convert configured actions to rule slices.
 	// First, what should we do with packets that come from workloads to the host itself.
+	// DefaultEndpointToHostAction の設定値は DROP・RETURN・ACCEPT（既定 DROP）。
+	// RETURN は本家と同じく default 分岐で扱う。使い方は filterWorkloadToHostChain を参照。
 	var inputAllowActions []ipfw.Action
 	switch config.EndpointToHostAction {
 	case "DROP":
