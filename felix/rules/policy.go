@@ -463,10 +463,20 @@ func (r *matchBlockBuilder) finishPositiveBlock() {
 	//
 	//     <AllBlocks bit> &&= <ThisBlock bit>
 	//
-	r.Rules = append(r.Rules, ipfw.Rule{
-		Match:  ipfw.Match(),
-		Action: ipfw.UntagAction{TagNumber: r.tagAllBlocksPass},
-	})
+	// 本家: MarkClear(ThisBlock) のときだけ ClearMark(AllBlocks)。
+	// 以前は条件なしで AllBlocks を消していたため、2つ目以降のブロックがあると、
+	// すべての条件を満たしていても一致しなかった。
+	r.Rules = append(r.Rules,
+		ipfw.Rule{
+			// このブロックの条件に一致しなかった（ThisBlock がない）ときだけ、AllBlocks を消す
+			Match:  ipfw.Match().NotTagged(r.tagThisBlockPass),
+			Action: ipfw.UntagAction{TagNumber: r.tagAllBlocksPass},
+		},
+		ipfw.Rule{
+			// 次のブロックが ThisBlock を使えるように消しておく（3つ以上のブロックがある場合）
+			Action: ipfw.UntagAction{TagNumber: r.tagThisBlockPass},
+		},
+	)
 }
 
 // srcOrDst is an enum for selecting source or destination rule rendering.
