@@ -408,13 +408,23 @@ func (r *matchBlockBuilder) maybeAppendInitialRule(tagNumToSetInitially uint16) 
 	if r.UsingMatchBlocks {
 		return
 	}
+	// 本家: ClearMarkAction{AllBlocks | ThisBlock} の後、必要なら SetMarkAction{初期値}。
+	// 以前は tag 0 を付けていたが、IPFW の tag は 1〜65534（sbin/ipfw/ipfw2.c の IPFW_ARG_MIN）で、
+	// tag 0 のルールは追加に失敗する。また前のルールの Scratch の tag が残ったままになる。
+	// untag は1つの番号しか取れないため、tag ごとに1ルールにする。
 	r.Rules = append(r.Rules,
-		ipfw.Rule{
-			Action: ipfw.TagAction{
-				TagNumber: tagNumToSetInitially,
-			},
-		},
+		ipfw.Rule{Action: ipfw.UntagAction{TagNumber: r.tagAllBlocksPass}},
+		ipfw.Rule{Action: ipfw.UntagAction{TagNumber: r.tagThisBlockPass}},
 	)
+	if tagNumToSetInitially != 0 {
+		r.Rules = append(r.Rules,
+			ipfw.Rule{
+				Action: ipfw.TagAction{
+					TagNumber: tagNumToSetInitially,
+				},
+			},
+		)
+	}
 	r.UsingMatchBlocks = true
 }
 

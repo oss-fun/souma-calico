@@ -134,6 +134,13 @@ func (m MatchCriteria) InInterface(iface string) MatchCriteria {
 	return append(m, fmt.Sprintf("recv '%s'", iface))
 }
 
+// NotInInterface は、受信インターフェースが iface に一致しないパケットに一致する（"not recv 'iface'"）。
+// 受信インターフェースがないパケット（ホストが生成したパケット）も一致する
+// （ip_fw2.c の iface_match() は ifp == NULL のとき不一致を返す）。
+func (m MatchCriteria) NotInInterface(iface string) MatchCriteria {
+	return append(m, fmt.Sprintf("not recv '%s'", iface))
+}
+
 func (m MatchCriteria) OutInterface(iface string) MatchCriteria {
 	return append(m, fmt.Sprintf("xmit '%s'", iface))
 }

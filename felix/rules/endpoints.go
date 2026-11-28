@@ -402,11 +402,10 @@ func (r *DefaultRuleRenderer) endpointIpfwChain(
 		return result
 	}
 
-	if chainType != chainTypeUntracked {
-		// Tracked chain: install conntrack rules, which implement our stateful connections.
-		// This allows return traffic associated with a previously-permitted request.
-		rules = r.appendConntrackRules(rules)
-	}
+	// 本家はここで conntrack のルール（ctstate RELATED,ESTABLISHED → ACCEPT）を置く。
+	// IPFW では、記録済みの接続の判定をエンドポイントのチェインではなく段階の入口で1回だけ行う
+	// （establishedCheckRule を参照）。同じ通過の中で同じ名前の check-state は1回しか検索されない
+	// （ip_fw_private.h の DYN_LOOKUP_NEEDED）ため、エンドポイントごとに置いても2つ目以降は働かない。
 
 	// First set up failsafes.
 	if failsafeChain != "" {
@@ -419,12 +418,14 @@ func (r *DefaultRuleRenderer) endpointIpfwChain(
 				Action: CallAction{Target: AddTableNameToChainName(table, failsafeChain)},
 			},
 			Rule{
-				// 本家の failsafe は ACCEPT で、その table の処理を（ポリシーを評価せずに）終える。
-				// IPFW では failsafe のチェインが Accept の tag を付けて戻るので、ここで続けて戻り、
-				// 後続の段階は Accept の tag で許可済みとして扱う。
-				Match:   Match().Tagged(r.IpfwTagAccept),
+				// 本家の failsafe は ACCEPT で、その table の処理だけを（ポリシーを評価せずに）終える。
+				// IPFW では failsafe のチェインが Failsafe の tag を付けて戻るので、ここで続けて戻る。
+				// 呼び出し元の段階（raw / mangle / filter）が Failsafe の tag を見てその段階を終え、
+				// tag を消す（failsafeEndRule / failsafeRecordRule）。Accept の tag は付けないため、
+				// 後続の段階の許可（acceptAlreadyAccepted など）には持ち越さない。
+				Match:   Match().Tagged(r.IpfwTagFailsafe),
 				Action:  ReturnAction{},
-				Comment: []string{"Return if failsafe accepted"},
+				Comment: []string{"Return if failsafe allowed"},
 			},
 		)
 	}
@@ -537,43 +538,16 @@ func (r *DefaultRuleRenderer) endpointIpfwChain(
 	return result
 }
 
-// ConntrackFlowName は、ポリシー・プロファイルで許可した接続を記録する動的ルールの名前。
-// 本家の conntrack（ctstate RELATED,ESTABLISHED）を IPFW の動的ルールで再現するために使う。
-const ConntrackFlowName = "calico"
-
-// appendConntrackRules は、以前に許可した接続（両方向）の通信を許可するルールを追加する。
+// acceptReturnRule は、match（Accept の tag が付いている）に一致したら呼び出し元へ戻るルールを返す。
 //
-// 本家は conntrack で ctstate RELATED,ESTABLISHED を許可し、INVALID を破棄する。
-// IPFW の established は TCP の RST / ACK フラグだけを見る（ipfw(8)）ため、状態の判定には使えない。
-// 代わりに IPFW の動的ルールを使う。
-//   - 許可して戻るルール（acceptReturnRule）が record-state で接続の状態を記録する。
-//   - ここで置く check-state が、記録済みの接続（両方向）に一致すると、
-//     記録したルールの動作（Accept の tag を付けて戻る）を実行する。一致しなければ次のルールへ進む。
-//
-// IPFW の動的ルールは、TCP の SYN・FIN・RST に応じて寿命を管理するが、
-// conntrack の RELATED・INVALID と同じ判定は提供しない。そのため、RELATED（ICMP エラーなど）の
-// 許可と INVALID の破棄は再現しない（制限）。
-func (r *DefaultRuleRenderer) appendConntrackRules(rules []Rule) []Rule {
-	return append(rules, Rule{
-		Action: CheckStateAction{FlowName: ConntrackFlowName},
-	})
-}
-
-// acceptReturnRule は、match に一致したら呼び出し元へ戻るルールを返す。
-// 状態を追跡するチェイン（untracked 以外）では、戻るときに接続の状態を記録し、
-// 戻る動作を「Accept の tag を付けて戻る」にする。check-state で記録済みの接続に一致したときは
-// この動作が実行されるため、以後の同じ接続も Accept の tag を付けて戻る。
+// ここでは接続の状態を記録しない。途中のポリシー（pre-DNAT、片方のエンドポイントなど）で許可した
+// 時点で記録すると、後続の段階（ワークロードの ingress など）を評価する前に記録済みとなり、
+// 以後の通信が check-state で後続のポリシーを飛ばしてしまうため。状態の記録は、その段階の検査を
+// すべて通過した位置（filter の INPUT / OUTPUT / FORWARD 相当の最後）だけで行う（recordStateRule）。
 func (r *DefaultRuleRenderer) acceptReturnRule(chainType endpointChainType, match MatchCriteria, comment string) Rule {
-	if chainType == chainTypeUntracked {
-		return Rule{
-			Match:   match,
-			Action:  ReturnAction{},
-			Comment: []string{comment},
-		}
-	}
 	return Rule{
-		Match:   match.RecordState(ConntrackFlowName),
-		Action:  ReturnTagAction{TagNumber: r.IpfwTagAccept},
+		Match:   match,
+		Action:  ReturnAction{},
 		Comment: []string{comment},
 	}
 }

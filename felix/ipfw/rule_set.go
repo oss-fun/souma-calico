@@ -940,11 +940,23 @@ func (t *RuleSet) applyUpdates() error {
 	newHashes := map[string][]string{}
 	newNumbers := map[string][]int{}
 
+	// 記録した番号（実際に ipfw list に出ていた番号、または前回の反映で入れた番号）の削除は、
+	// 失敗したら反映全体を失敗にする（set -e）。番号が分からないときに区画全体を消す場合だけは、
+	// その番号にルールがないことがあるので失敗を許す（mayBeAbsent）。
 	deleted := map[int]bool{}
+	mayBeAbsent := map[int]bool{}
 	var deleteOrder []int
 	addDelete := func(n int) {
+		delete(mayBeAbsent, n) // 記録した番号として消すので、失敗を許さない
 		if !deleted[n] {
 			deleted[n] = true
+			deleteOrder = append(deleteOrder, n)
+		}
+	}
+	addDeleteMayBeAbsent := func(n int) {
+		if !deleted[n] {
+			deleted[n] = true
+			mayBeAbsent[n] = true
 			deleteOrder = append(deleteOrder, n)
 		}
 	}
@@ -1005,7 +1017,7 @@ func (t *RuleSet) applyUpdates() error {
 				t.logCxt.WithField("chainName", chainName).Warn(
 					"Unknown rule number in dataplane; rewriting the whole chain block")
 				for n := int(chain.GetStartRuleNum()); n < int(chain.GetStartRuleNum())+RULE_BUF; n++ {
-					addDelete(n)
+					addDeleteMayBeAbsent(n)
 				}
 				break
 			}
@@ -1110,7 +1122,7 @@ func (t *RuleSet) applyUpdates() error {
 
 	// 2. 削除をすべて書いてから、追加を書く。
 	for _, n := range deleteOrder {
-		buf.WriteLine(renderDeleteNumberLine(n))
+		buf.WriteLine(renderDeleteNumberLine(n, mayBeAbsent[n]))
 	}
 
 	// 2a. 本体のチェイン: 変わった位置・増えた位置と、消した番号に置かれていたルールを追加する。
@@ -1198,6 +1210,10 @@ func (t *RuleSet) applyUpdates() error {
 		t.opReporter.RecordOperation(fmt.Sprintf("update-%v-v%d", t.Name, t.IPVersion))
 
 		if err := t.execIpfwRestore(buf); err != nil {
+			// スクリプトは途中の行で止まるため、データプレーンは一部だけ変わっている。
+			// 本家（Table.applyUpdates）と同じく、次の試行の前に読み直して差分を取り直す。
+			// キャッシュ（chainToDataplaneHashes など）は更新しない。
+			t.inSyncWithDataPlane = false
 			return fmt.Errorf("writing out buffer: %w", err)
 		}
 
@@ -1270,8 +1286,15 @@ func (r *RuleSet) execIpfwRestore(buf *RestoreInputBuilder) error {
 
 	countIpfwRestore++
 
-	if err := exec.Command(path).Run(); err != nil {
-		return fmt.Errorf("exec Restore failed: %v", err)
+	// スクリプトは set -e で、失敗した行で止まり 0 以外で終了する（RestoreScriptHeader）。
+	// 失敗したときは ipfw の出力（標準エラーを含む）をログとエラーに含める。
+	if out, err := exec.Command(path).CombinedOutput(); err != nil {
+		output := strings.TrimSpace(string(out))
+		r.logCxt.WithError(err).WithFields(log.Fields{
+			"script": path,
+			"output": output,
+		}).Warn("Failed to apply ipfw rules")
+		return fmt.Errorf("exec %s failed: %v: %s", path, err, output)
 	}
 	return nil
 }
@@ -1311,9 +1334,15 @@ func (t *RuleSet) placeholderChain(chainName string) (*Chain, bool) {
 }
 
 // renderDeleteNumberLine は、番号を指定してルールを消す行を返す。
-// その番号のルールがすでにない場合も、スクリプトの後続の行を止めないように失敗を無視する。
-func renderDeleteNumberLine(ruleNum int) string {
-	return fmt.Sprintf("ipfw -q delete %d 2>/dev/null || true", ruleNum)
+// 通常は失敗をそのまま返す（set -e でスクリプトが止まる）。mayBeAbsent のとき
+// （番号が分からず区画全体を消す場合）だけ、ルールがない番号の失敗を許す。
+// ipfw の delete は、ルールがない番号と、それ以外の失敗（権限など）を終了状態で区別しないため、
+// 区画全体の削除では、それ以外の失敗も後続の追加の失敗として検出する。
+func renderDeleteNumberLine(ruleNum int, mayBeAbsent bool) string {
+	if mayBeAbsent {
+		return fmt.Sprintf("ipfw -q delete %d 2>/dev/null || true", ruleNum)
+	}
+	return fmt.Sprintf("ipfw -q delete %d", ruleNum)
 }
 
 func (t *RuleSet) commentFrag(hash string) string {

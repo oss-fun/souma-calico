@@ -60,6 +60,78 @@ func (r *DefaultRuleRenderer) acceptAlreadyAccepted() []Rule {
 	}
 }
 
+// ConntrackFlowName は、許可した接続を記録する動的ルールの名前。
+// 本家の conntrack（ctstate RELATED,ESTABLISHED）を IPFW の動的ルールで再現するために使う。
+//
+// IPFW の established は TCP の RST / ACK フラグだけを見る（ipfw(8)）ため、状態の判定には使わない。
+// 代わりに次の2つを組み合わせる。
+//   - 記録（recordStateRule）: その段階の検査をすべて通過した位置でだけ record-state で記録する。
+//     途中のポリシー（pre-DNAT、片方のエンドポイント）で記録すると、後続のポリシーを評価する前に
+//     記録済みになり、以後の通信が後続のポリシーを飛ばすため。
+//   - 照合（establishedCheckRule）: 各通過の最初の段階の入口に check-state を1つだけ置く。
+//     同じ通過の中で同じ名前の check-state は1回しか検索されない（ip_fw_private.h の
+//     DYN_LOOKUP_NEEDED）ため、エンドポイントのチェインごとに置いても2つ目以降は働かない。
+//     一致すると、記録したルールの動作（Established の tag を付けて戻る）を check-state の位置で実行し、
+//     その段階を終える。
+//     受信時（in）は M-PREROUTING 相当、ホスト発（out）は F-OUTPUT 相当、
+//     転送の送信時（out）は F-FORWARD 相当の入口に置く。F-INPUT 相当は、同じ受信時の通過で
+//     M-PREROUTING 相当が付けた Established の tag を見る。
+//
+// 記録したルールはどの段階のチェインにあっても、動作は「tag を付けて戻る」なので、
+// check-state の位置（いずれも call で呼ばれる段階のチェイン）でもその段階を終えるだけになる。
+//
+// IPFW の動的ルールは、TCP の SYN・FIN・RST に応じて寿命を管理するが、
+// conntrack の RELATED・INVALID と同じ判定は提供しない。そのため、RELATED（ICMP エラーなど）の
+// 許可と INVALID の破棄は再現しない（制限）。
+const ConntrackFlowName = "calico"
+
+// establishedCheckRule は、記録済みの接続（両方向）に一致するかを調べる check-state を返す。
+func (r *DefaultRuleRenderer) establishedCheckRule() Rule {
+	return Rule{
+		Action: CheckStateAction{FlowName: ConntrackFlowName},
+	}
+}
+
+// recordStateRule は、match に一致したパケットの接続を記録し、Established の tag を付けて戻るルールを返す。
+func (r *DefaultRuleRenderer) recordStateRule(match MatchCriteria, comment string) Rule {
+	return Rule{
+		Match:   match.RecordState(ConntrackFlowName),
+		Action:  ReturnTagAction{TagNumber: r.IpfwTagEstablished},
+		Comment: []string{comment},
+	}
+}
+
+// failsafeEndRule は、raw / mangle の段階で failsafe が許可したパケットについて、
+// Failsafe の tag を消してその段階を終えるルールを返す。
+// 本家の raw / mangle の failsafe は ACCEPT で、その table の処理だけを終える。後続の table
+// （filter）の許可にはしないため、tag を消して持ち越さない。
+func (r *DefaultRuleRenderer) failsafeEndRule() Rule {
+	return Rule{
+		Match:   Match().Tagged(r.IpfwTagFailsafe),
+		Action:  ReturnUntagAction{TagNumber: r.IpfwTagFailsafe},
+		Comment: []string{"End of this stage: failsafe allowed"},
+	}
+}
+
+// failsafeRecordRule は、filter の段階で failsafe が許可したパケットについて、接続を記録して
+// その段階を終えるルールを返す。本家の filter の failsafe も ACCEPT で、conntrack が接続を記録するため、
+// 応答（送信元ポートが failsafe のポート）は ESTABLISHED として許可される。
+// 1つのルールに tag と untag は同時に付けられないため、Failsafe の tag は消さずに残す。
+// 残った tag は、次の通過の最初の段階（raw の PREROUTING / OUTPUT 相当、F-FORWARD 相当）で消す（stageTags）。
+func (r *DefaultRuleRenderer) failsafeRecordRule() Rule {
+	return r.recordStateRule(Match().Tagged(r.IpfwTagFailsafe), "Failsafe allowed; record the connection")
+}
+
+// stageTags は、移植で追加した段階間の tag（Failsafe・Established）を返す。
+// 各通過の最初の段階で、前の通過（転送パケットの受信時など）から残った tag を消すために使う。
+// IPFW の tag はパケット（mbuf）に付くため、転送パケットでは受信時に付けた tag が送信時にも残る。
+func (r *DefaultRuleRenderer) stageTags() []uint16 {
+	return []uint16{
+		r.IpfwTagFailsafe,
+		r.IpfwTagEstablished,
+	}
+}
+
 // Forward check chain is to check if a packet belongs to a forwarded traffic or not.
 // With kube-proxy running in ipvs mode, both local or forwarded traffic goes through INPUT filter chain.
 func (r *DefaultRuleRenderer) StaticFilterInputForwardCheckChain(ipVersion uint8) *Chain {
@@ -208,6 +280,15 @@ func FilterInputChainAllowWG(ipVersion uint8, r Config, allowAction ipfw.Action)
 func (r *DefaultRuleRenderer) filterInputChain(ipVersion uint8) *Chain {
 	var inputRules []Rule
 
+	// 記録済みの接続のパケットは許可する。照合は同じ受信時の通過の M-PREROUTING 相当の
+	// check-state で済んでいる（同じ名前の check-state は1つの通過で1回しか検索されない）ため、
+	// ここではその結果の Established の tag を見る（ConntrackFlowName を参照）。
+	inputRules = append(inputRules, Rule{
+		Match:   Match().Tagged(r.IpfwTagEstablished),
+		Action:  r.filterAllowAction,
+		Comment: []string{"Allow packets of recorded connections"},
+	})
+
 	inputRules = append(inputRules, FilterInputChainAllowWG(ipVersion, r.Config, r.filterAllowAction)...)
 
 	// Apply our policy to packets coming from workload endpoints.
@@ -226,16 +307,14 @@ func (r *DefaultRuleRenderer) filterInputChain(ipVersion uint8) *Chain {
 	inputRules = append(inputRules, r.acceptAlreadyAccepted()...)
 
 	// Apply host endpoint policy.
-	inputRules = append(inputRules, untagRules(r.allCalicoTags()...)...)
+	inputRules = append(inputRules, untagRules(append(r.allCalicoTags(), r.IpfwTagFailsafe)...)...)
 	inputRules = append(inputRules,
 		Rule{
 			Action: CallAction{Target: ChainFilterDispatchFromHostEndpoint},
 		},
-		Rule{
-			Match:   Match().Tagged(r.IpfwTagAccept),
-			Action:  r.filterAllowAction,
-			Comment: []string{},
-		},
+		// failsafe またはホストのポリシーで許可した。INPUT 相当の検査はここまでなので、接続を記録する。
+		r.failsafeRecordRule(),
+		r.recordStateRule(Match().Tagged(r.IpfwTagAccept), "Host endpoint policy allowed; record the connection"),
 	)
 
 	result := &Chain{
@@ -362,11 +441,14 @@ func (r *DefaultRuleRenderer) filterWorkloadToHostChain(ipVersion uint8) *Chain 
 }
 
 // failsafeInChain / failsafeOutChain は、host endpoint のチェインから call される。
-// 本家の failsafe は ACCEPT で、その table の処理を（ポリシーを評価せずに）終える。
-// IPFW の allow はその通過の評価全体を終えるため使わず、Accept の tag を付けて戻る
-// （return tag Accept）。呼び出し元の host endpoint のチェインは、続けて
-// return tagged Accept で戻り（endpointIpfwChain を参照）、後続の段階は Accept の tag を
-// 許可済みとして扱う（acceptAlreadyAccepted など）。
+// 本家の failsafe は ACCEPT で、その table の処理だけを（ポリシーを評価せずに）終える。
+// 後続の table の許可にはしない（raw の応答用のルールは、filter で conntrack の状態を確認させる意図）。
+// IPFW の allow はその通過の評価全体を終えるため使わず、Failsafe の tag を付けて戻る
+// （return tag Failsafe）。呼び出し元の host endpoint のチェインは、続けて
+// return tagged Failsafe で戻り（endpointIpfwChain を参照）、その段階のチェインが
+// Failsafe の tag を見て段階を終える（raw / mangle は failsafeEndRule で tag を消し、
+// filter は failsafeRecordRule で接続を記録する）。Accept の tag は付けないため、
+// 後続の段階の許可（acceptAlreadyAccepted など）には持ち越さない。
 func (r *DefaultRuleRenderer) failsafeInChain(table string, ipVersion uint8) *Chain {
 	rules := []Rule{}
 
@@ -375,7 +457,7 @@ func (r *DefaultRuleRenderer) failsafeInChain(table string, ipVersion uint8) *Ch
 			Match: Match().
 				Protocol(protoPort.Protocol).
 				DestPorts(protoPort.Port),
-			Action: ReturnTagAction{TagNumber: r.IpfwTagAccept},
+			Action: ReturnTagAction{TagNumber: r.IpfwTagFailsafe},
 		}
 
 		if protoPort.Net != "" {
@@ -406,7 +488,7 @@ func (r *DefaultRuleRenderer) failsafeInChain(table string, ipVersion uint8) *Ch
 				Match: Match().
 					Protocol(protoPort.Protocol).
 					SourcePorts(protoPort.Port),
-				Action: ReturnTagAction{TagNumber: r.IpfwTagAccept},
+				Action: ReturnTagAction{TagNumber: r.IpfwTagFailsafe},
 			}
 
 			if protoPort.Net != "" {
@@ -458,7 +540,7 @@ func (r *DefaultRuleRenderer) failsafeOutChain(table string, ipVersion uint8) *C
 			Match: Match().
 				Protocol(protoPort.Protocol).
 				DestPorts(protoPort.Port),
-			Action: ReturnTagAction{TagNumber: r.IpfwTagAccept},
+			Action: ReturnTagAction{TagNumber: r.IpfwTagFailsafe},
 		}
 
 		if protoPort.Net != "" {
@@ -489,7 +571,7 @@ func (r *DefaultRuleRenderer) failsafeOutChain(table string, ipVersion uint8) *C
 				Match: Match().
 					Protocol(protoPort.Protocol).
 					SourcePorts(protoPort.Port),
-				Action: ReturnTagAction{TagNumber: r.IpfwTagAccept},
+				Action: ReturnTagAction{TagNumber: r.IpfwTagFailsafe},
 			}
 
 			if protoPort.Net != "" {
@@ -549,7 +631,12 @@ func (r *DefaultRuleRenderer) StaticFilterForwardChains() []*Chain {
 	// we're clearing all our mark bits to minimise non-determinism caused by rules in other chains.
 	// We exclude the accept bit because we use that to communicate from the raw/pre-dnat chains.
 	// （本家: ClearMarkAction{allCalicoMarkBits() &^ IptablesMarkAccept}）
-	rules = append(rules, untagRules(r.IpfwTagPass, r.IpfwTagScratch0, r.IpfwTagScratch1)...)
+	// 受信時の通過で付けた Failsafe / Established の tag も消す（stageTags）。
+	rules = append(rules, untagRules(append([]uint16{r.IpfwTagPass, r.IpfwTagScratch0, r.IpfwTagScratch1}, r.stageTags()...)...)...)
+	// 記録済みの接続のパケットは、FORWARD 相当の検査をせずに戻る（POSTROUTING 相当へ進む）。
+	// 本家は各エンドポイントのチェインの ctstate RELATED,ESTABLISHED → ACCEPT で filter FORWARD を終える。
+	// 転送の送信時の通過で最初の check-state なので、ここで検索される（ConntrackFlowName を参照）。
+	rules = append(rules, r.establishedCheckRule())
 	rules = append(rules,
 		Rule{
 			// Apply forward policy for the incoming Host endpoint if accept bit is clear which means the packet
@@ -589,6 +676,12 @@ func (r *DefaultRuleRenderer) StaticFilterForwardChains() []*Chain {
 		Rule{
 			Action: CallAction{Target: ChainFilterCIDRBlock},
 		},
+	)
+
+	// 送信元・宛先のエンドポイントのポリシーをすべて通過して許可された。ここで接続を記録する。
+	// 以後の同じ接続（両方向）は、入口の check-state で FORWARD 相当の検査を省く。
+	rules = append(rules,
+		r.recordStateRule(Match().Tagged(r.IpfwTagAccept), "Forward policy allowed; record the connection"),
 	)
 
 	results := []*Chain{{
@@ -637,6 +730,10 @@ func (r *DefaultRuleRenderer) StaticFilterOutputChains(ipVersion uint8) []*Chain
 func (r *DefaultRuleRenderer) filterOutputChain(ipVersion uint8) *Chain {
 	var rules []Rule
 
+	// 記録済みの接続のパケットは、OUTPUT 相当の検査をせずに戻る。
+	// ホスト発の通過で最初の check-state なので、ここで検索される（ConntrackFlowName を参照）。
+	rules = append(rules, r.establishedCheckRule())
+
 	// Accept immediately if we've already accepted this packet in the raw or mangle table.
 	rules = append(rules, r.acceptAlreadyAccepted()...)
 
@@ -651,11 +748,11 @@ func (r *DefaultRuleRenderer) filterOutputChain(ipVersion uint8) *Chain {
 		log.WithField("ifacePrefix", prefix).Debug("Adding workload match rules")
 		ifaceMatch := prefix + "*"
 		rules = append(rules,
-			Rule{
-				// if packet goes to a workload endpoint. set return action properly.
-				Match:  Match().OutInterface(ifaceMatch),
-				Action: ReturnAction{},
-			},
+			// if packet goes to a workload endpoint. set return action properly.
+			// ホストからワークロードへの接続は記録する。記録しないと、ワークロードからの応答が
+			// 受信時の F-INPUT 相当でワークロードの egress ポリシーにかかる（本家は conntrack の
+			// ESTABLISHED で許可する）。
+			r.recordStateRule(Match().OutInterface(ifaceMatch), "Host to workload; record the connection"),
 		)
 	}
 
@@ -665,7 +762,7 @@ func (r *DefaultRuleRenderer) filterOutputChain(ipVersion uint8) *Chain {
 	// on the new destination IP, but that hasn't happened yet.  Instead, in the DNAT case, we
 	// apply host endpoint in the mangle POSTROUTING chain; see StaticManglePostroutingChain for
 	// that.
-	rules = append(rules, untagRules(r.allCalicoTags()...)...)
+	rules = append(rules, untagRules(append(r.allCalicoTags(), r.IpfwTagFailsafe)...)...)
 	rules = append(rules,
 		Rule{
 			// 本家: NotConntrackState("DNAT")（DNAT されていない通信だけ）。
@@ -675,11 +772,9 @@ func (r *DefaultRuleRenderer) filterOutputChain(ipVersion uint8) *Chain {
 			Match:  Match(),
 			Action: CallAction{Target: ChainFilterDispatchToHostEndpoint},
 		},
-		Rule{
-			Match:   Match().Tagged(r.IpfwTagAccept),
-			Action:  r.filterAllowAction,
-			Comment: []string{},
-		},
+		// failsafe またはホストのポリシーで許可した。OUTPUT 相当の検査はここまでなので、接続を記録する。
+		r.failsafeRecordRule(),
+		r.recordStateRule(Match().Tagged(r.IpfwTagAccept), "Host endpoint policy allowed; record the connection"),
 	)
 
 	result := &Chain{
@@ -780,13 +875,10 @@ func (r *DefaultRuleRenderer) StaticManglePreroutingChain(ipVersion uint8) *Chai
 	//
 	// 本家: ctstate RELATED,ESTABLISHED → ACCEPT / RETURN。
 	// IPFW の established は TCP の RST / ACK フラグだけを見るため使わず、
-	// エンドポイントのチェインで記録した接続の動的ルール（ConntrackFlowName）と照合する。
-	// 一致すると、記録したルールの動作（Accept の tag を付けて戻る）でこの段階を終える。
-	rules = append(rules,
-		Rule{
-			Action: CheckStateAction{FlowName: ConntrackFlowName},
-		},
-	)
+	// filter の段階の最後で記録した接続の動的ルール（ConntrackFlowName）と照合する。
+	// 受信時の通過で最初の check-state なので、ここで検索される。一致すると、記録したルールの動作
+	// （Established の tag を付けて戻る）でこの段階を終え、F-INPUT 相当はその tag で許可する。
+	rules = append(rules, r.establishedCheckRule())
 
 	// Or if we've already accepted this packet in the raw table.
 	rules = append(rules,
@@ -801,6 +893,8 @@ func (r *DefaultRuleRenderer) StaticManglePreroutingChain(ipVersion uint8) *Chai
 		Rule{
 			Action: CallAction{Target: ChainMangleDispatchFromHostEndpoint},
 		},
+		// failsafe で許可した場合は、Failsafe の tag を消して mangle の段階を終える（filter へは持ち越さない）。
+		r.failsafeEndRule(),
 		// Following that...  If the packet was explicitly allowed by a pre-DNAT policy, it
 		// will have MarkAccept set.  If the packet was denied, it will have been dropped
 		// already.  If the incoming interface isn't one that we're policing, or the packet
@@ -899,7 +993,8 @@ func (r *DefaultRuleRenderer) StaticRawPreroutingChain(ipVersion uint8) *Chain {
 
 	// For safety, clear all our mark bits before we start.  (We could be in append mode and
 	// another process' rules could have left the mark bit set.)
-	rules = append(rules, untagRules(r.allCalicoTags()...)...)
+	// 受信時の通過の最初の段階なので、移植で追加した段階間の tag も消す（stageTags）。
+	rules = append(rules, untagRules(append(r.allCalicoTags(), r.stageTags()...)...)...)
 
 	// Set a mark on the packet if it's from a workload interface.
 	tagFromWorkload := r.IpfwTagScratch0
@@ -938,6 +1033,10 @@ func (r *DefaultRuleRenderer) StaticRawPreroutingChain(ipVersion uint8) *Chain {
 		// Send non-workload traffic to the untracked policy chains.
 		Rule{Match: Match().NotTagged(tagFromWorkload),
 			Action: CallAction{Target: ChainRawDispatchFromHostEndpoint}},
+		// failsafe で許可した場合は、Failsafe の tag を消して raw の段階を終える。
+		// 本家の raw の failsafe（応答用の送信元ポートのルールを含む）は raw の ACCEPT だけで、
+		// mark を付けない。filter で接続の状態とポリシーを確認させるため、許可を持ち越さない。
+		r.failsafeEndRule(),
 		// Then, if the packet was marked as allowed, accept it.  Packets also return here
 		// without the mark bit set if the interface wasn't one that we're policing.  We
 		// let those packets fall through to the user's policy.
@@ -1020,10 +1119,13 @@ func untagRules(tags ...uint16) []Rule {
 func (r *DefaultRuleRenderer) StaticRawOutputChain(tcBypassTag uint16) *Chain {
 	// For safety, clear all our mark bits before we start.  (We could be in
 	// append mode and another process' rules could have left the mark bit set.)
-	rules := untagRules(r.allCalicoTags()...)
+	// ホスト発の通過の最初の段階なので、移植で追加した段階間の tag も消す（stageTags）。
+	rules := untagRules(append(r.allCalicoTags(), r.stageTags()...)...)
 	rules = append(rules, []Rule{
 		// Then, jump to the untracked policy chains.
 		{Action: CallAction{Target: ChainRawDispatchToHostEndpoint}},
+		// failsafe で許可した場合は、Failsafe の tag を消して raw の段階を終える（filter へは持ち越さない）。
+		r.failsafeEndRule(),
 		// Then, if the packet was marked as allowed, accept it.  Packets also
 		// return here without the mark bit set if the interface wasn't one that
 		// we're policing.

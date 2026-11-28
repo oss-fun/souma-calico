@@ -24,6 +24,7 @@ import (
 	"reflect"
 	"regexp"
 	"sync"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -1033,24 +1034,34 @@ const (
 // setUpIptablesCompatible は振り分けのルールを入れる。
 // natIface は外向きインターフェース名（逆変換を受信時のこの IF に限定する）。
 func setUpIptablesCompatible(natIface string) error {
+	// 振り分けには送信元アドレス（me）を使わない。ワークロードが送信元をホストのアドレスに
+	// 偽装すると、受信時の RPF の検査を通らず、送信時にはホスト発（OUTPUT 相当）と判定されて
+	// ワークロードの egress ポリシー（FORWARD 相当）を飛ばせてしまうため。
+	//   受信時（in）: すべてのパケットを共通区画に入れる（RPF・raw / mangle PREROUTING 相当を必ず通す）。
+	//   送信時（out）: 受信インターフェースの有無で、ホスト発と転送を分ける。
+	//     ipfw_chk() は送信時の受信インターフェースを m_rcvif(m) とし、ホストが生成したパケットでは NULL になる
+	//     （ICMP の応答も icmp_send() で rcvif を NULL にする）。iface_match() は ifp == NULL のとき不一致なので、
+	//     recv '*'（glob）は「受信インターフェースがある＝転送」、not recv '*' は「ホスト発」に一致する。
+	//     '*' はシェルに展開されないよう引用符で囲む（InInterface / NotInInterface）。
 	firstRule := []ipfw.Rule {
 		{
 			// 受信時（in）はホスト宛て・転送の区別なく共通区画に入れる。
 			// どちらかは逆変換の後でないと決まらないため。
 			Number: IN_ENTRY,
 			Action: ipfw.CallAction{RuleNumber: IN_RULE},
-			Match: ipfw.Match().NotSourceNet("me").DestNet("any").PacketDirection("in"),
+			Match: ipfw.Match().SourceNet("any").DestNet("any").PacketDirection("in"),
 		},
 		{
+			// ホスト発の送信時（out）: OUTPUT → POSTROUTING 相当を評価する
 			Number: OUT_ENTRY,
 			Action: ipfw.CallAction{RuleNumber: OUT_RULE},
-			Match: ipfw.Match().SourceNet("me").NotDestNet("me").PacketDirection("out"),
+			Match: ipfw.Match().SourceNet("any").DestNet("any").PacketDirection("out").NotInInterface("*"),
 		},
 		{
 			// 転送パケットの送信時（out）: FORWARD → POSTROUTING 相当を評価する
 			Number: FOR_OUT_ENTRY,
 			Action: ipfw.CallAction{RuleNumber: FOR_OUT_RULE},
-			Match: ipfw.Match().NotSourceNet("me").NotDestNet("me").PacketDirection("out"),
+			Match: ipfw.Match().SourceNet("any").DestNet("any").PacketDirection("out").InInterface("*"),
 		},
 		{
 			Number: END_ENTRY,
@@ -1117,8 +1128,10 @@ func setUpIptablesCompatible(natIface string) error {
 	if err := ipfw.RulesToRestoreFile(firstRule, RESTORE_FILE); err != nil {
 		return fmt.Errorf("RulesToRestoreFile failed: %v", err)
 	}
-	if err := exec.Command(RESTORE_FILE).Run(); err != nil {
-		return fmt.Errorf("exec.Command.Run Failed: %v", err)
+	// スクリプトは set -e で、失敗したルールの行で止まる（ipfw.RestoreScriptHeader）。
+	// 失敗したときは ipfw の出力（標準エラーを含む）をエラーに含める。
+	if out, err := exec.Command(RESTORE_FILE).CombinedOutput(); err != nil {
+		return fmt.Errorf("exec %s failed: %v: %s", RESTORE_FILE, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

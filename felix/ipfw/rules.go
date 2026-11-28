@@ -314,7 +314,7 @@ func RulesToRestoreFile(rules []Rule, path string) error {
 	}
 	defer file.Close()
 
-	_, err = file.Write([]byte("#!/bin/sh\n"))
+	_, err = file.Write([]byte(RestoreScriptHeader))
 	if err != nil {
 		return fmt.Errorf("Write failed: %v", err)
 	}
@@ -322,11 +322,18 @@ func RulesToRestoreFile(rules []Rule, path string) error {
 	for _, r := range rules {
 		_, err = file.Write([]byte(fmt.Sprintf("%s\n", r.RenderRaw(""))))
 		if err != nil {
-			return fmt.Errorf("Write Rule(%s) failed: %v", r.Number, err)
+			return fmt.Errorf("Write Rule(%d) failed: %v", r.Number, err)
 		}
 	}
 	return nil
 }
+
+// RestoreScriptHeader はルールを反映するスクリプトの先頭。
+// set -e により、ipfw のコマンドが失敗した行でスクリプトを止め、0 以外で終了させる。
+// 以前は最後のコマンドの終了状態だけが返り、途中のルール（deny など）の追加に失敗しても
+// 成功として扱われ、キャッシュも成功した状態に更新されていた。
+// 失敗してよいコマンド（存在しないかもしれない番号の削除など）は、行の側で明示的に失敗を許す。
+const RestoreScriptHeader = "#!/bin/sh\nset -e\n"
 
 // 独自実装（必要か確認中）
 func BytesToRestoreFile(rules []byte, path string) error {
@@ -336,7 +343,7 @@ func BytesToRestoreFile(rules []byte, path string) error {
 	}
 	defer file.Close()
 
-	_, err = file.Write([]byte("#!/bin/sh\n"))
+	_, err = file.Write([]byte(RestoreScriptHeader))
 	if err != nil {
 		return fmt.Errorf("Write shell header failed: %v", err)
 	}

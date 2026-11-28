@@ -347,6 +347,12 @@ type Config struct {
 	// ipfwMarkNonCaliEndpoint is an endpoint mark which is reserved
 	// to mark non-calico (workload or host) endpoint.
 	IpfwTagNonCaliEndpoint uint16
+	// IpfwTagFailsafe は、failsafe のチェインで許可したことを示す。
+	// 本家の failsafe は ACCEPT でその table の処理だけを終える。IPFW では、呼び出し元の段階が
+	// この tag を見て段階を終え、tag を消す（後続の段階へ許可を持ち越さない）。
+	IpfwTagFailsafe uint16
+	// IpfwTagEstablished は、記録済みの接続（check-state :calico で一致）であることを示す。
+	IpfwTagEstablished uint16
 
 	OpenStackMetadataIP          net.IP
 	OpenStackMetadataPort        uint16

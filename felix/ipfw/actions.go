@@ -101,6 +101,18 @@ func (a ReturnTagAction) String() string {
 	return fmt.Sprintf("return tag %d", a.TagNumber)
 }
 
+// ReturnUntagAction は tag を消してから呼び出し元へ戻る（"return untag N"）。
+// tag / untag は動作の修飾で、1つのルールにはどちらか1つしか付けられない
+// （sbin/ipfw/ipfw2.c: "tag and untag cannot be specified more than once"）。
+type ReturnUntagAction struct {
+	TypeReturnUntag struct{}
+	TagNumber       uint16
+}
+
+func (a ReturnUntagAction) String() string {
+	return fmt.Sprintf("return untag %d", a.TagNumber)
+}
+
 type SkiptoAction struct {
 	TypeSkipto struct{}
 	Target     string
