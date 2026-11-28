@@ -104,6 +104,12 @@ type RuleSet struct {
 	inSyncWithDataPlane bool
 
 	chainToDataplaneHashes map[string][]string
+	// chainToDataplaneNumbers は chainToDataplaneHashes と同じ並びで、各ルールの実際の IPFW の
+	// ルール番号を持つ。置き換え・削除は位置から番号を計算せず、この番号で行う
+	// （末尾の return は開始番号+RULE_BUF-1 にあり、位置と番号が対応しないため）。
+	chainToDataplaneNumbers map[string][]int
+	// lastReadNumbers は readHashesAndRulesFrom が最後に読んだ番号（loadDataplaneState で採用する）。
+	lastReadNumbers map[string][]int
 
 	chainToFullRules map[string][]string
 
@@ -255,6 +261,8 @@ func NewRuleSet(
 		chainRefCounts:         refcounts,
 		dirtyChains:            set.New[string](),
 		chainToDataplaneHashes: map[string][]string{},
+		chainToDataplaneNumbers: map[string][]int{},
+		lastReadNumbers:        map[string][]int{},
 		chainToFullRules:       map[string][]string{},
 		logCxt:                 log.WithFields(logFields),
 		updateRateLimitedLog: logutilslc.NewRateLimitedLogger(
@@ -485,7 +493,9 @@ func (t *RuleSet) loadDataplaneState() {
 		if !t.ourChainsRegexp.MatchString(chainName) {
 			// Not one of our chains so it may be one that we're inserting rules into.
 			insertedRules := t.chainToInsertedRules[chainName]
-			if len(insertedRules) == 0 {
+			// InsertOrAppendRules は AppendRules を使う（chainToAppendedRules に入る）ため、
+			// 追加のルールも見る。見ないと、追加のルールしかないチェインが再同期のたびに不一致になる。
+			if len(insertedRules) == 0 && len(t.chainToAppendedRules[chainName]) == 0 {
 				// This chain shouldn't have any inserts, make sure that's the
 				// case.  This case also covers the case where a chain was removed,
 				// making dpHashes nil.
@@ -576,6 +586,7 @@ func (t *RuleSet) loadDataplaneState() {
 
 	t.logCxt.Debug("Finished loading ipfw state")
 	t.chainToDataplaneHashes = dataplaneHashes
+	t.chainToDataplaneNumbers = t.lastReadNumbers
 	t.chainToFullRules = dataplaneRules
 	t.inSyncWithDataPlane = true
 }
@@ -703,6 +714,7 @@ func (t *RuleSet) attemptToGetHashesAndRulesFromDataplane() (hashes map[string][
 func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]string, rules map[string][]string, err error) {
 	hashes = make(map[string][]string)
 	rules = make(map[string][]string)
+	numbers := make(map[string][]int)
 	scanner := bufio.NewScanner(r)
 
 	chainHasCalicoRule := set.New[string]()
@@ -720,11 +732,15 @@ func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]s
 			t.logCxt.Debug("Not an append, skipping")
 			continue
 		}
-		chainName := string(captures[1])
-		if !strings.Contains(chainName, tablePrefix(t.Name)) {
+		commentChainName := string(captures[1])
+		if !strings.Contains(commentChainName, tablePrefix(t.Name)) {
 			//logCxt.Debug("Table hasn't Chain")
 			continue
 		}
+		// InsertOrAppendRules で追加したルールのハッシュは "<チェイン名>*append*" で計算される
+		// （expectedHashesForInsertAppendChain）。メモリ上では "<チェイン名>" で管理しているため、
+		// 読み直した結果も "<チェイン名>" に揃える（ハッシュの値は "*append*" 付きのまま）。
+		chainName := strings.TrimSuffix(commentChainName, "*append*")
 
 		hash := ""
 		if captures != nil {
@@ -732,6 +748,12 @@ func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]s
 			chainHasCalicoRule.Add(chainName)
 		}
 		hashes[chainName] = append(hashes[chainName], hash)
+		// 実際のルール番号を、ハッシュと同じ並びで記録する（読めない場合は -1）。
+		num, ok := ExtractLeadingRuleNumber(string(line))
+		if !ok {
+			num = -1
+		}
+		numbers[chainName] = append(numbers[chainName], num)
 
 		if !t.ourChainsRegexp.MatchString(chainName) {
 			// Only store the full rule for Calico rules. Otherwise, we just use the placeholder "-".
@@ -757,6 +779,7 @@ func (t *RuleSet) readHashesAndRulesFrom(r io.ReadCloser) (hashes map[string][]s
 
 	t.logCxt.Debugf("Read hashes from dataplane: %#v", hashes)
 	t.logCxt.Debugf("Read rules from dataplane: %#v", rules)
+	t.lastReadNumbers = numbers
 	return hashes, rules, nil
 }
 
@@ -899,35 +922,92 @@ func (t *RuleSet) applyUpdates() error {
 	})
 
 	// Make a second pass over the dirty chains.  This time, we write out the rule changes.
+	//
+	// IPFW のルール番号は削除しても詰まらず、ipfw delete <番号> はその番号のルールをすべて消す
+	// （ip_fw_sockopt.c の delete_range）。そのため、位置から番号を計算して置き換えるのではなく、
+	// 次の2段階で更新する。
+	//   1. すべてのチェインについて、消す番号を先に集める。
+	//      - 本体のチェイン: ハッシュが変わった位置・なくなった位置の実際の番号
+	//        （chainToDataplaneNumbers。読み直したときに ipfw list から記録したもの）
+	//      - 不要になったチェイン: 記録しているすべての番号
+	//      - 挿入・追加のルール: ずれていれば記録しているすべての番号
+	//   2. 削除をすべて書いてから、追加を書く。
+	//      ハッシュが変わった位置・増えた位置のルールに加えて、1. で消した番号に置かれていた
+	//      ルール（ほかのチェインのものを含む）も入れ直す。
+	// 削除を先にまとめて書くので、同じ番号を削除と追加の両方で使っても正しく揃う
+	// （末尾の return が開始番号+RULE_BUF-1 にあることや、前回の実行で残った同じ番号のルールにも対応する）。
+	// 削除と追加は1つのスクリプトで順に実行するため、iptables-restore のような一括の切り替えではない。
 	newHashes := map[string][]string{}
-	t.dirtyChains.Iter(func(chainName string) error {
-		if chain, ok := t.desiredStateOfChain(chainName); ok {
-			// Chain update or creation.  Scan the chain against its previous hashes
-			// and replace/append/delete as appropriate.
-			var previousHashes []string
-			previousHashes = t.chainToDataplaneHashes[chainName]
+	newNumbers := map[string][]int{}
 
-			currentHashes := chain.RuleHashes(features)
-			newHashes[chainName] = currentHashes
-			for i := 0; i < len(previousHashes) || i < len(currentHashes); i++ {
-				var line string
-				if i < len(previousHashes) && i < len(currentHashes) {
-					if previousHashes[i] == currentHashes[i] {
-						continue
-					}
-					// Hash doesn't match, replace the rule.
-					ruleNum := i + 1 // 1-indexed.
-					prefixFrag := t.commentFrag(currentHashes[i])
-					line = chain.Rules[i].RenderReplace(chainName, uint16(ruleNum), prefixFrag, features)
-				} else if i < len(previousHashes) {
-					ruleNum := len(currentHashes) + 1 // 1-indexed
-					line = t.renderDeleteByIndexLine(chainName, ruleNum)
+	deleted := map[int]bool{}
+	var deleteOrder []int
+	addDelete := func(n int) {
+		if !deleted[n] {
+			deleted[n] = true
+			deleteOrder = append(deleteOrder, n)
+		}
+	}
+
+	// 1a. 本体のチェイン（更新・作成・削除）
+	type pendingChain struct {
+		chain          *Chain
+		previousHashes []string
+		currentHashes  []string
+		currentNumbers []int
+	}
+	pendingChains := map[string]*pendingChain{}
+	t.dirtyChains.Iter(func(chainName string) error {
+		previousHashes := t.chainToDataplaneHashes[chainName]
+		previousNumbers := t.chainToDataplaneNumbers[chainName]
+
+		chain, ok := t.desiredStateOfChain(chainName)
+		if !ok {
+			// Chain deletion.  記録しているすべての番号を消す。
+			for i, n := range previousNumbers {
+				if n > 0 {
+					addDelete(n)
 				} else {
-					// currentHashes was longer.  Append.
-					prefixFrag := t.commentFrag(currentHashes[i])
-					line = chain.Rules[i].RenderAppend(chainName, prefixFrag, features)
+					t.logCxt.WithFields(log.Fields{
+						"chainName": chainName,
+						"position":  i,
+					}).Warn("Unknown rule number in dataplane; cannot delete this rule")
 				}
-				buf.WriteLine(line)
+			}
+			newHashes[chainName] = nil
+			newNumbers[chainName] = nil
+			return nil
+		}
+
+		// Chain update or creation.  Scan the chain against its previous hashes.
+		currentHashes := chain.RuleHashes(features)
+		currentNumbers := make([]int, len(chain.Rules))
+		for i, rule := range chain.Rules {
+			currentNumbers[i] = int(rule.Number)
+		}
+		newHashes[chainName] = currentHashes
+		newNumbers[chainName] = currentNumbers
+		pendingChains[chainName] = &pendingChain{
+			chain:          chain,
+			previousHashes: previousHashes,
+			currentHashes:  currentHashes,
+			currentNumbers: currentNumbers,
+		}
+
+		for i := range previousHashes {
+			if i < len(currentHashes) && previousHashes[i] == currentHashes[i] {
+				continue
+			}
+			if i < len(previousNumbers) && previousNumbers[i] > 0 {
+				addDelete(previousNumbers[i])
+			} else {
+				// 番号が分からない場合は、このチェインの区画全体を消してから入れ直す。
+				t.logCxt.WithField("chainName", chainName).Warn(
+					"Unknown rule number in dataplane; rewriting the whole chain block")
+				for n := int(chain.GetStartRuleNum()); n < int(chain.GetStartRuleNum())+RULE_BUF; n++ {
+					addDelete(n)
+				}
+				break
 			}
 		}
 		return nil // Delay clearing the set until we've programmed ipfw.
@@ -941,16 +1021,23 @@ func (t *RuleSet) applyUpdates() error {
 		copy(newChainToFullRules[chain], rules)
 	}
 
+	// 1b. 挿入・追加のルール（振り分けの区画 1〜49 から各チェインを呼ぶルール）
 	// Now calculate ipfw updates for our inserted and appended rules, which are used to hook top-level chains.
+	type pendingInsertAppend struct {
+		newRules              []string
+		newInsertedRuleHashes []string
+		newAppendedRuleHashes []string
+	}
+	pendingInsertAppends := map[string]*pendingInsertAppend{}
 	var deleteRenderingErr error
-	var line string
 	t.dirtyInsertAppend.Iter(func(chainName string) error {
 		previousHashes := t.chainToDataplaneHashes[chainName]
 		newRules := newChainToFullRules[chainName]
 
 		// Calculate the hashes for our inserted and appended rules.
+		numNonCalicoRules := numEmptyStrings(previousHashes)
 		newChainHashes, newInsertedRuleHashes, newAppendedRuleHashes := t.expectedHashesForInsertAppendChain(
-			chainName, numEmptyStrings(previousHashes))
+			chainName, numNonCalicoRules)
 
 		if reflect.DeepEqual(newChainHashes, previousHashes) {
 			// Chain is in sync, skip to next one.
@@ -959,14 +1046,43 @@ func (t *RuleSet) applyUpdates() error {
 
 		// For simplicity, if we've discovered that we're out-of-sync, remove all our
 		// rules from this chain, then re-insert/re-append them below.
+		// 削除は、読み直したときに記録した実際の番号で行う（位置からは計算しない）。
+		previousNumbers := t.chainToDataplaneNumbers[chainName]
 		for i := 0; i < len(previousHashes); i++ {
 			if previousHashes[i] != "" {
-				line, deleteRenderingErr = t.renderDeleteByValueLine(chainName, i)
-				if deleteRenderingErr != nil {
-					//fmt.Printf("\nここ！\n")
+				if i >= len(previousNumbers) || previousNumbers[i] <= 0 {
+					deleteRenderingErr = fmt.Errorf(
+						"unknown rule number for rule %d in %q; cannot delete it safely", i, chainName)
 					return set.StopIteration
 				}
-				buf.WriteLine(line)
+				addDelete(previousNumbers[i])
+			}
+		}
+
+		// 新しいルールの番号を、ハッシュと同じ並びで記録する（Calico 以外のルールの位置は -1）。
+		insertedRules := t.chainToInsertedRules[chainName]
+		appendedRules := t.chainToAppendedRules[chainName]
+		numbers := make([]int, len(newChainHashes))
+		for i := range numbers {
+			numbers[i] = -1
+		}
+		offset := 0
+		if t.insertMode == "append" {
+			offset = numNonCalicoRules
+		}
+		for i, rule := range insertedRules {
+			numbers[i+offset] = int(rule.Number)
+		}
+		offset = len(insertedRules) + numNonCalicoRules
+		for i, rule := range appendedRules {
+			numbers[i+offset] = int(rule.Number)
+		}
+		for _, rule := range append(append([]Rule{}, insertedRules...), appendedRules...) {
+			if rule.Number == 0 {
+				// 番号 0 は ipfw add で自動採番になり、記録した番号と一致しなくなる。
+				deleteRenderingErr = fmt.Errorf(
+					"inserted/appended rule in %q has no rule number", chainName)
+				return set.StopIteration
 			}
 		}
 
@@ -977,15 +1093,77 @@ func (t *RuleSet) applyUpdates() error {
 				copyOfNewRules = append(copyOfNewRules, rule)
 			}
 		}
-		newRules = copyOfNewRules
-		rules := t.chainToInsertedRules[chainName]
-		insertRuleLines := make([]string, len(rules))
+		pendingInsertAppends[chainName] = &pendingInsertAppend{
+			newRules:              copyOfNewRules,
+			newInsertedRuleHashes: newInsertedRuleHashes,
+			newAppendedRuleHashes: newAppendedRuleHashes,
+		}
+		newHashes[chainName] = newChainHashes
+		newNumbers[chainName] = numbers
+
+		return nil // Delay clearing the set until we've programmed ipfw.
+	})
+	// If rendering a delete by line number reached an unexpected state, error out so applyUpdates() can be retried.
+	if deleteRenderingErr != nil {
+		return deleteRenderingErr
+	}
+
+	// 2. 削除をすべて書いてから、追加を書く。
+	for _, n := range deleteOrder {
+		buf.WriteLine(renderDeleteNumberLine(n))
+	}
+
+	// 2a. 本体のチェイン: 変わった位置・増えた位置と、消した番号に置かれていたルールを追加する。
+	for chainName, p := range pendingChains {
+		for i := range p.currentHashes {
+			changed := i >= len(p.previousHashes) || p.previousHashes[i] != p.currentHashes[i]
+			if changed || deleted[p.currentNumbers[i]] {
+				prefixFrag := t.commentFrag(p.currentHashes[i])
+				buf.WriteLine(p.chain.Rules[i].RenderAppend(chainName, prefixFrag, features))
+			}
+		}
+	}
+
+	// 2b. 今回更新しないチェインでも、消した番号にルールが置かれていれば入れ直す
+	// （前回の実行で残ったチェインが同じ番号を使っていた場合など）。
+	// 更新しないチェインはハッシュが一致しているので、i 番目の記録とルールは対応している。
+	if len(deleted) > 0 {
+		for chainName, numbers := range t.chainToDataplaneNumbers {
+			if _, ok := pendingChains[chainName]; ok {
+				continue
+			}
+			if t.dirtyChains.Contains(chainName) || t.dirtyInsertAppend.Contains(chainName) {
+				continue
+			}
+			chain, ok := t.desiredStateOfChain(chainName)
+			if !ok {
+				continue
+			}
+			hashes := t.chainToDataplaneHashes[chainName]
+			for i, n := range numbers {
+				if !deleted[n] || i >= len(chain.Rules) || i >= len(hashes) {
+					continue
+				}
+				t.logCxt.WithFields(log.Fields{
+					"chainName":  chainName,
+					"ruleNumber": n,
+				}).Info("Re-adding rule whose number was deleted by another chain update")
+				buf.WriteLine(chain.Rules[i].RenderAppend(chainName, t.commentFrag(hashes[i]), features))
+			}
+		}
+	}
+
+	// 2c. 挿入・追加のルール
+	for chainName, p := range pendingInsertAppends {
+		newRules := p.newRules
 
 		// Add inserted rules if there is any
+		rules := t.chainToInsertedRules[chainName]
 		if len(rules) > 0 {
 			t.logCxt.Debug("Rendering append rules.")
+			insertRuleLines := make([]string, len(rules))
 			for i := 0; i < len(rules); i++ {
-				prefixFrag := t.commentFrag(newInsertedRuleHashes[i])
+				prefixFrag := t.commentFrag(p.newInsertedRuleHashes[i])
 				line := rules[i].RenderAppend(chainName, prefixFrag, features)
 				buf.WriteLine(line)
 				insertRuleLines[i] = line
@@ -995,12 +1173,11 @@ func (t *RuleSet) applyUpdates() error {
 
 		// Add appended rules if there is any
 		rules = t.chainToAppendedRules[chainName]
-		appendRuleLines := make([]string, len(rules))
-
 		if len(rules) > 0 {
 			t.logCxt.Debug("Rendering specific append rules.")
+			appendRuleLines := make([]string, len(rules))
 			for i := 0; i < len(rules); i++ {
-				prefixFrag := t.commentFrag(newAppendedRuleHashes[i])
+				prefixFrag := t.commentFrag(p.newAppendedRuleHashes[i])
 				line := rules[i].RenderAppend(chainName, prefixFrag, features)
 				buf.WriteLine(line)
 				appendRuleLines[i] = line
@@ -1008,30 +1185,8 @@ func (t *RuleSet) applyUpdates() error {
 			newRules = append(newRules, appendRuleLines...)
 		}
 
-		newHashes[chainName] = newChainHashes
 		newChainToFullRules[chainName] = newRules
-
-		return nil // Delay clearing the set until we've programmed ipfw.
-	})
-	// If rendering a delete by line number reached an unexpected state, error out so applyUpdates() can be retried.
-	if deleteRenderingErr != nil {
-		return deleteRenderingErr
 	}
-
-	// Do deletions at the end.  This ensures that we don't try to delete any chains that
-	// are still referenced (because we'll have removed the references in the modify pass
-	// above).  Note: if a chain is being deleted at the same time as a chain that it refers to
-	// then we'll issue a create+flush instruction in the very first pass, which will sever the
-	// references.
-	t.dirtyChains.Iter(func(chainName string) error {
-		if _, ok := t.desiredStateOfChain(chainName); !ok {
-			// Chain deletion
-			// TODO
-			//buf.WriteLine(fmt.Sprintf("ipfw delete %d", ChainNameToChainNum[chainName]))
-			newHashes[chainName] = nil
-		}
-		return nil // Delay clearing the set until we've programmed ipfw.
-	})
 
 	buf.EndTransaction()
 
@@ -1080,6 +1235,13 @@ func (t *RuleSet) applyUpdates() error {
 			t.chainToDataplaneHashes[chainName] = hashes
 		}
 	}
+	for chainName, numbers := range newNumbers {
+		if numbers == nil {
+			delete(t.chainToDataplaneNumbers, chainName)
+		} else {
+			t.chainToDataplaneNumbers[chainName] = numbers
+		}
+	}
 	t.chainToFullRules = newChainToFullRules
 
 	return nil
@@ -1119,7 +1281,39 @@ func (t *RuleSet) desiredStateOfChain(chainName string) (chain *Chain, present b
 		return
 	}
 	chain, present = t.chainNameToChain[chainName]
-	return
+	if present {
+		return
+	}
+	return t.placeholderChain(chainName)
+}
+
+// placeholderChain は、参照されているがまだルールが登録されていないチェインの代わりに置く
+// 空のチェイン（開始番号の count と、開始番号+RULE_BUF-1 の return だけ）を返す。
+//
+// IPFW の call / skipto は番号への移動で、移動先の番号にルールがなければ、それより大きい番号の
+// 最初のルールへ進む（ipfw(8)）。参照先のチェインがないと次のチェインの区画を評価してしまうため、
+// 本体が登録されるまで（または参照がなくなるまで）空のチェインを置いて、すぐに戻るようにする。
+// 番号が決まっているチェイン（ChainNameToChain にあるもの）で、この表のものだけを対象にする。
+func (t *RuleSet) placeholderChain(chainName string) (*Chain, bool) {
+	if !strings.HasPrefix(chainName, "cali-"+tablePrefix(t.Name)) {
+		return nil, false
+	}
+	known, ok := ChainNameToChain[chainName]
+	if !ok || known.Number == 0 {
+		return nil, false
+	}
+	c := &Chain{Name: chainName, Number: known.Number}
+	if err := c.Organize(); err != nil {
+		t.logCxt.WithError(err).WithField("chainName", chainName).Warn("Failed to build placeholder chain")
+		return nil, false
+	}
+	return c, true
+}
+
+// renderDeleteNumberLine は、番号を指定してルールを消す行を返す。
+// その番号のルールがすでにない場合も、スクリプトの後続の行を止めないように失敗を無視する。
+func renderDeleteNumberLine(ruleNum int) string {
+	return fmt.Sprintf("ipfw -q delete %d 2>/dev/null || true", ruleNum)
 }
 
 func (t *RuleSet) commentFrag(hash string) string {
@@ -1181,12 +1375,13 @@ func ExtractLeadingRuleNumber(line string) (int, bool) {
 }
 
 func CalculateRuleHashes(chainName string, rules []Rule, features *environment.Features) []string {
+	// 挿入・追加のルールは呼び出し側が番号を決めて渡すので、Organize() はしない。
+	// Organize() すると、"<チェイン名>*append*" という名前のチェインに新しい区画が割り当てられ
+	// （ChainNameToChain に登録される）、先頭の count と末尾の return の分だけハッシュが増えて、
+	// 実際に入れたルールのハッシュと並びが合わなくなる。
 	chain := &Chain{
 		Name: chainName,
 		Rules: rules,
-	}
-	if err := chain.Organize(); err != nil {
-		log.WithField("err", err).Panic("Failed StaticFilterInputForwardCheckChain result Organize")
 	}
 	return chain.RuleHashes(features)
 }
