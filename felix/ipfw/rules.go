@@ -84,18 +84,58 @@ func (r Rule) renderInner(fragments []string, prefixFragment string, features *e
 			fragments = append(fragments, allPacketMatch)
 		}
 	}
-	if len(r.Comment) > 0 {
-		for _, c := range r.Comment {
-			// ルールは sh のスクリプトとして実行する（execIpfwRestore / RulesToRestoreFile）ため、
-			// コメントに ; や引用符などがあるとシェルに解釈される（; ならそこでコマンドが分かれ、
-			// 残りが別のコマンドとして実行される）。シェルで安全な文字以外は _ に置き換える。
-			fragments = append(fragments, fmt.Sprintf("// %s", escapeComment(c)))
-		}
-	}
-	if prefixFragment != "" {
-		fragments = append(fragments, prefixFragment)
+	if comment := renderComment(r.Comment, prefixFragment); comment != "" {
+		fragments = append(fragments, comment)
 	}
 	return strings.Join(fragments, " ")
+}
+
+// MaxIpfwCommentLen は、ipfw のコメント（最初の "//" より後ろ）の最大の長さ。
+// sbin/ipfw/ipfw2.c の fill_comment() は、"//" より後ろの各語の長さ+1 の合計が 84 を超えると
+// "comment too long (max 80 chars)" で失敗する。余裕を見て 80 文字にする。
+const MaxIpfwCommentLen = 80
+
+// renderComment は、説明のコメント（comments）とハッシュのコメント（prefixFragment、"// cali:..."）を
+// つないだコメント部分を返す。形は "// 説明1 // 説明2 // cali:..."。
+//
+//   - ルールは sh のスクリプトとして実行する（execIpfwRestore / RulesToRestoreFile）ため、
+//     説明に ; や引用符などがあるとシェルに解釈される（; ならそこでコマンドが分かれ、残りが別の
+//     コマンドとして実行される）。シェルで安全な文字以外は _ に置き換える。
+//   - 長さが MaxIpfwCommentLen を超えると ipfw add が失敗する。ハッシュのコメントは読み直しに
+//     必要なので必ず残し、説明の側を切り詰める（入りきらなければ説明を省く）。
+func renderComment(comments []string, prefixFragment string) string {
+	escaped := make([]string, 0, len(comments))
+	for _, c := range comments {
+		if c = strings.TrimSpace(escapeComment(c)); c != "" {
+			escaped = append(escaped, c)
+		}
+	}
+	description := strings.Join(escaped, " // ")
+	hash := strings.TrimPrefix(prefixFragment, "// ")
+
+	// 説明に使える長さ（ハッシュがあるときは " // " とハッシュの分を除く）
+	available := MaxIpfwCommentLen
+	if hash != "" {
+		available -= len(" // ") + len(hash)
+	}
+	if len(description) > available {
+		if available > 0 {
+			description = strings.TrimSpace(description[:available])
+		} else {
+			description = ""
+		}
+	}
+
+	switch {
+	case description != "" && hash != "":
+		return "// " + description + " // " + hash
+	case description != "":
+		return "// " + description
+	case hash != "":
+		return "// " + hash
+	default:
+		return ""
+	}
 }
 
 var shellUnsafe = regexp.MustCompile(`[^\w @%+=:,./#-]`)

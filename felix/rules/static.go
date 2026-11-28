@@ -119,7 +119,7 @@ func (r *DefaultRuleRenderer) failsafeEndRule() Rule {
 // 1つのルールに tag と untag は同時に付けられないため、Failsafe の tag は消さずに残す。
 // 残った tag は、次の通過の最初の段階（raw の PREROUTING / OUTPUT 相当、F-FORWARD 相当）で消す（stageTags）。
 func (r *DefaultRuleRenderer) failsafeRecordRule() Rule {
-	return r.recordStateRule(Match().Tagged(r.IpfwTagFailsafe), "Failsafe allowed, record the connection")
+	return r.recordStateRule(Match().Tagged(r.IpfwTagFailsafe), "Record state: failsafe allowed")
 }
 
 // stageTags は、移植で追加した段階間の tag（Failsafe・Established）を返す。
@@ -314,7 +314,7 @@ func (r *DefaultRuleRenderer) filterInputChain(ipVersion uint8) *Chain {
 		},
 		// failsafe またはホストのポリシーで許可した。INPUT 相当の検査はここまでなので、接続を記録する。
 		r.failsafeRecordRule(),
-		r.recordStateRule(Match().Tagged(r.IpfwTagAccept), "Host endpoint policy allowed, record the connection"),
+		r.recordStateRule(Match().Tagged(r.IpfwTagAccept), "Record state: host endpoint allowed"),
 	)
 
 	result := &Chain{
@@ -681,7 +681,7 @@ func (r *DefaultRuleRenderer) StaticFilterForwardChains() []*Chain {
 	// 送信元・宛先のエンドポイントのポリシーをすべて通過して許可された。ここで接続を記録する。
 	// 以後の同じ接続（両方向）は、入口の check-state で FORWARD 相当の検査を省く。
 	rules = append(rules,
-		r.recordStateRule(Match().Tagged(r.IpfwTagAccept), "Forward policy allowed, record the connection"),
+		r.recordStateRule(Match().Tagged(r.IpfwTagAccept), "Record state: forward allowed"),
 	)
 
 	results := []*Chain{{
@@ -752,7 +752,7 @@ func (r *DefaultRuleRenderer) filterOutputChain(ipVersion uint8) *Chain {
 			// ホストからワークロードへの接続は記録する。記録しないと、ワークロードからの応答が
 			// 受信時の F-INPUT 相当でワークロードの egress ポリシーにかかる（本家は conntrack の
 			// ESTABLISHED で許可する）。
-			r.recordStateRule(Match().OutInterface(ifaceMatch), "Host to workload, record the connection"),
+			r.recordStateRule(Match().OutInterface(ifaceMatch), "Record state: host to workload"),
 		)
 	}
 
@@ -774,7 +774,7 @@ func (r *DefaultRuleRenderer) filterOutputChain(ipVersion uint8) *Chain {
 		},
 		// failsafe またはホストのポリシーで許可した。OUTPUT 相当の検査はここまでなので、接続を記録する。
 		r.failsafeRecordRule(),
-		r.recordStateRule(Match().Tagged(r.IpfwTagAccept), "Host endpoint policy allowed, record the connection"),
+		r.recordStateRule(Match().Tagged(r.IpfwTagAccept), "Record state: host endpoint allowed"),
 	)
 
 	result := &Chain{
