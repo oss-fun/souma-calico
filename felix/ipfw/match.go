@@ -17,8 +17,68 @@ func Match() MatchCriteria {
 	return nil
 }
 
+// Render は ipfw のルールの条件部分を返す。
+//
+// ipfw の条件は「本体（ip from 送信元 to 宛先）」の後に「オプション（proto・tagged・recv など）」を
+// 並べる形で、本体を書くなら from と to の両方が必要（ないと "missing ``to''" で失敗する）。
+// MatchCriteria は送信元（"ip from X"）・宛先（"to Y"）・オプションを呼び出し順に持つため、
+// ここで次のように並べ直す。
+//   - 送信元も宛先もない: オプションだけ（ipfw は本体を省略できる）
+//   - どちらかがある: "ip from 送信元 to 宛先"（ない側は any）の後にオプション
+//   - 送信元・宛先の条件が2つ以上ある: 本体に入るのは1つずつなので、残りは
+//     src-ip / dst-ip のオプション（AND で評価される）にする
 func (m MatchCriteria) Render() string {
-	return strings.Join([]string(m), " ")
+	var src, dst, opts []string
+	for _, part := range m {
+		switch {
+		case strings.HasPrefix(part, "ip from "):
+			src = append(src, strings.TrimPrefix(part, "ip from "))
+		case strings.HasPrefix(part, "to "):
+			dst = append(dst, strings.TrimPrefix(part, "to "))
+		default:
+			opts = append(opts, part)
+		}
+	}
+	if len(src) == 0 && len(dst) == 0 {
+		return strings.Join(opts, " ")
+	}
+
+	srcBody, srcExtra := splitAddrs(src)
+	dstBody, dstExtra := splitAddrs(dst)
+	parts := []string{"ip from " + srcBody, "to " + dstBody}
+	for _, a := range srcExtra {
+		parts = append(parts, addrOption("src-ip", a))
+	}
+	for _, a := range dstExtra {
+		parts = append(parts, addrOption("dst-ip", a))
+	}
+	parts = append(parts, opts...)
+	return strings.Join(parts, " ")
+}
+
+// splitAddrs は、本体に置くアドレス（なければ any）と、オプションにする残りのアドレスを返す。
+// any は条件にならないので、オプションにはしない。
+func splitAddrs(addrs []string) (body string, extra []string) {
+	body = "any"
+	for _, a := range addrs {
+		if a == "any" {
+			continue
+		}
+		if body == "any" {
+			body = a
+			continue
+		}
+		extra = append(extra, a)
+	}
+	return body, extra
+}
+
+// addrOption は、アドレスの条件を src-ip / dst-ip のオプションにする（"not X" は "not src-ip X"）。
+func addrOption(keyword, addr string) string {
+	if strings.HasPrefix(addr, "not ") {
+		return "not " + keyword + " " + strings.TrimPrefix(addr, "not ")
+	}
+	return keyword + " " + addr
 }
 
 func (m MatchCriteria) String() string {
@@ -187,23 +247,26 @@ func (m MatchCriteria) NotSourcePortRanges(ports []*proto.PortRange) MatchCriter
 	return append(m, fmt.Sprintf("not src-port %s", portsString))
 }
 
+// DestPortRanges / NotDestPortRanges は宛先ポートの条件（以前は誤って src-port を出していた）。
 func (m MatchCriteria) DestPortRanges(ports []*proto.PortRange) MatchCriteria {
 	portsString := PortRangesToMultiport(ports)
-	return append(m, fmt.Sprintf("src-port %s", portsString))
+	return append(m, fmt.Sprintf("dst-port %s", portsString))
 }
 
 func (m MatchCriteria) NotDestPortRanges(ports []*proto.PortRange) MatchCriteria {
 	portsString := PortRangesToMultiport(ports)
-	return append(m, fmt.Sprintf("src-port %s", portsString))
+	return append(m, fmt.Sprintf("not dst-port %s", portsString))
 }
 
+// PortRangesToMultiport は、ポートの一覧を ipfw の形（"80,443,1000-2000"）にする。
+// ipfw の範囲は "-" でつなぐ（iptables の multiport の ":" ではない）。
 func PortRangesToMultiport(ports []*proto.PortRange) string {
 	portFragments := make([]string, len(ports))
 	for i, port := range ports {
 		if port.First == port.Last {
 			portFragments[i] = fmt.Sprintf("%d", port.First)
 		} else {
-			portFragments[i] = fmt.Sprintf("%d:%d", port.First, port.Last)
+			portFragments[i] = fmt.Sprintf("%d-%d", port.First, port.Last)
 		}
 	}
 	portsString := strings.Join(portFragments, ",")
