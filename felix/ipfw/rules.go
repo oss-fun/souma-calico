@@ -198,6 +198,14 @@ func (c *Chain) Organize() error {
 		return fmt.Errorf("Chain is nill")
 	}
 
+	// 本体のルール数の検査。区画は「開始番号: count」「開始番号+1〜+N: 本体」
+	// 「開始番号+RULE_BUF-1: return」なので、本体は MaxChainBodyRules 個まで。
+	// 超えると末尾の return と同じ番号になるか、次のチェインの区画に入り込む。
+	if len(c.Rules) > MaxChainBodyRules {
+		return fmt.Errorf("chain %s has %d rules, but at most %d rules fit in a %d-number block",
+			c.Name, len(c.Rules), MaxChainBodyRules, RULE_BUF)
+	}
+
 	// chain番号の生成
 	start := c.GetStartRuleNum()
 	if start == 65535 {
@@ -206,6 +214,11 @@ func (c *Chain) Organize() error {
 		if err != nil {
 			return fmt.Errorf("SetNewNumber failed: %v", err)
 		}
+	}
+	// 区画全体（開始番号〜開始番号+RULE_BUF-1）が使える番号に収まることを確認する。
+	if int(start)+RULE_BUF-1 > MaxChainRuleNumber {
+		return fmt.Errorf("chain %s block %d-%d exceeds the maximum rule number %d",
+			c.Name, start, int(start)+RULE_BUF-1, MaxChainRuleNumber)
 	}
 	c.Number = start
 
@@ -236,24 +249,43 @@ func (c *Chain) Organize() error {
 }
 
 const (
+	// 1つのチェインに割り当てる番号の区画の大きさ。
 	RULE_BUF = 100
+
+	// チェインに使える最大のルール番号。
+	// 65534 は各区画の終わりの skipto 先（END_RULE）、65535 は IPFW の既定ルールのため使わない。
+	MaxChainRuleNumber = 65533
+
+	// 1つのチェインの本体に置けるルール数（先頭の count と末尾の return を除く）。
+	MaxChainBodyRules = RULE_BUF - 2
 )
 
+// 呼び出しの深さについて:
+// IPFW の call の呼び出し履歴は 16 段まで（ipfw(8): "currently has size of 16 entries"）。
+// 上限に達した状態の call は、呼び出し先へ移らずに次のルールへ進む（ip_fw2.c O_CALLRETURN）。
+// 現在の構成での最大の深さは、振り分け(1) → 段階のチェイン(2) → dispatch / host endpoint dispatch(3)
+// → エンドポイントのチェイン（skipto のため増えない）→ ポリシーグループ(4) → ポリシー(5) で、16 段未満。
+// チェインの入れ子を増やす場合は、この深さを確認すること。
+
 // chain番号の生成
+//
+// 既存のチェインの最大の開始番号 + RULE_BUF を新しい開始番号にする。
+// uint16 で計算すると上限を超えたときに低い番号へ折り返すため、int で計算し、
+// 区画全体（開始番号〜開始番号+RULE_BUF-1）が MaxChainRuleNumber に収まることを確認する。
 func SetNewNumber() (uint16, error) {
-	var result uint16
+	max := 0
 	for _, c := range ChainNameToChain {
-		n := c.Number
-		if result < n {
-			result = n
+		if n := int(c.Number); n > max {
+			max = n
 		}
 	}
-	result = result + RULE_BUF
-	if result >= 65535 {
-		return 0, fmt.Errorf("No Enough Chain Num")
+	next := max + RULE_BUF
+	if next+RULE_BUF-1 > MaxChainRuleNumber {
+		return 0, fmt.Errorf("no chain number block left: next block %d-%d exceeds %d",
+			next, next+RULE_BUF-1, MaxChainRuleNumber)
 	}
 
-	return result, nil
+	return uint16(next), nil
 }
 
 func (c *Chain) GetFinRuleNum() uint16 {
