@@ -86,7 +86,10 @@ func (r Rule) renderInner(fragments []string, prefixFragment string, features *e
 	}
 	if len(r.Comment) > 0 {
 		for _, c := range r.Comment {
-			fragments = append(fragments, fmt.Sprintf("// %s", c))
+			// ルールは sh のスクリプトとして実行する（execIpfwRestore / RulesToRestoreFile）ため、
+			// コメントに ; や引用符などがあるとシェルに解釈される（; ならそこでコマンドが分かれ、
+			// 残りが別のコマンドとして実行される）。シェルで安全な文字以外は _ に置き換える。
+			fragments = append(fragments, fmt.Sprintf("// %s", escapeComment(c)))
 		}
 	}
 	if prefixFragment != "" {
