@@ -410,9 +410,23 @@ func (r *DefaultRuleRenderer) endpointIpfwChain(
 
 	// First set up failsafes.
 	if failsafeChain != "" {
-		rules = append(rules, Rule{
-			Action: CallAction{Target: failsafeChain},
-		})
+		rules = append(rules,
+			Rule{
+				// failsafe のチェインはテーブルごとにテーブル名付きの名前で生成される
+				// （failsafeInChain / failsafeOutChain: cali-F-failsafe-in など）。
+				// 呼び出し元から渡される名前（ChainFailsafeIn など）にはテーブル名がないため、
+				// そのままでは生成済みのチェインに参照がつながらない。
+				Action: CallAction{Target: AddTableNameToChainName(table, failsafeChain)},
+			},
+			Rule{
+				// 本家の failsafe は ACCEPT で、その table の処理を（ポリシーを評価せずに）終える。
+				// IPFW では failsafe のチェインが Accept の tag を付けて戻るので、ここで続けて戻り、
+				// 後続の段階は Accept の tag で許可済みとして扱う。
+				Match:   Match().Tagged(r.IpfwTagAccept),
+				Action:  ReturnAction{},
+				Comment: []string{"Return if failsafe accepted"},
+			},
+		)
 	}
 
 	// Start by ensuring that the policy result bits are clear.  Policy chains

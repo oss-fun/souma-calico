@@ -361,6 +361,12 @@ func (r *DefaultRuleRenderer) filterWorkloadToHostChain(ipVersion uint8) *Chain 
 	return result
 }
 
+// failsafeInChain / failsafeOutChain は、host endpoint のチェインから call される。
+// 本家の failsafe は ACCEPT で、その table の処理を（ポリシーを評価せずに）終える。
+// IPFW の allow はその通過の評価全体を終えるため使わず、Accept の tag を付けて戻る
+// （return tag Accept）。呼び出し元の host endpoint のチェインは、続けて
+// return tagged Accept で戻り（endpointIpfwChain を参照）、後続の段階は Accept の tag を
+// 許可済みとして扱う（acceptAlreadyAccepted など）。
 func (r *DefaultRuleRenderer) failsafeInChain(table string, ipVersion uint8) *Chain {
 	rules := []Rule{}
 
@@ -369,7 +375,7 @@ func (r *DefaultRuleRenderer) failsafeInChain(table string, ipVersion uint8) *Ch
 			Match: Match().
 				Protocol(protoPort.Protocol).
 				DestPorts(protoPort.Port),
-			Action: AllowAction{},
+			Action: ReturnTagAction{TagNumber: r.IpfwTagAccept},
 		}
 
 		if protoPort.Net != "" {
@@ -400,7 +406,7 @@ func (r *DefaultRuleRenderer) failsafeInChain(table string, ipVersion uint8) *Ch
 				Match: Match().
 					Protocol(protoPort.Protocol).
 					SourcePorts(protoPort.Port),
-				Action: AllowAction{},
+				Action: ReturnTagAction{TagNumber: r.IpfwTagAccept},
 			}
 
 			if protoPort.Net != "" {
@@ -452,7 +458,7 @@ func (r *DefaultRuleRenderer) failsafeOutChain(table string, ipVersion uint8) *C
 			Match: Match().
 				Protocol(protoPort.Protocol).
 				DestPorts(protoPort.Port),
-			Action: AllowAction{},
+			Action: ReturnTagAction{TagNumber: r.IpfwTagAccept},
 		}
 
 		if protoPort.Net != "" {
@@ -483,7 +489,7 @@ func (r *DefaultRuleRenderer) failsafeOutChain(table string, ipVersion uint8) *C
 				Match: Match().
 					Protocol(protoPort.Protocol).
 					SourcePorts(protoPort.Port),
-				Action: AllowAction{},
+				Action: ReturnTagAction{TagNumber: r.IpfwTagAccept},
 			}
 
 			if protoPort.Net != "" {
