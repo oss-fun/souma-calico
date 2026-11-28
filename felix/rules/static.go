@@ -16,6 +16,7 @@ package rules
 
 import (
 	"os/exec"
+	"sort"
 	"strings"
 
 	log "github.com/sirupsen/logrus"
@@ -903,6 +904,30 @@ func (r *DefaultRuleRenderer) StaticRawPreroutingChain(ipVersion uint8) *Chain {
 		})
 	}
 
+	// Apply strict RPF check to packets from workload interfaces.  This prevents
+	// workloads from spoofing their IPs.
+	//
+	// 本家: ワークロード由来のパケットを cali-rpf-skip に送り、そこで除外されなければ
+	// rpfilter で検査して破棄する。IPFW では verrevpath で同じ検査をする。
+	// cali-R-rpf-skip は、除外対象（IF と送信元プレフィックスの組）に一致したパケットに
+	// tagRPFSkip を付けて戻る（RPFSkipChain を参照）。判定後は tagRPFSkip を消す。
+	// OpenStack の DHCP の特例（送信元 0.0.0.0）と WireGuard の mark は、この移植では扱わない。
+	tagRPFSkip := r.IpfwTagScratch1
+	rules = append(rules,
+		Rule{
+			Match:  Match().Tagged(tagFromWorkload),
+			Action: CallAction{Target: ChainRawRpfSkip},
+		},
+		Rule{
+			Match:   Match().Tagged(tagFromWorkload).NotTagged(tagRPFSkip).NotVerrevpath(),
+			Action:  r.IpfwFilterDenyAction(),
+			Comment: []string{"Drop workload traffic that fails the RPF check"},
+		},
+		Rule{
+			Action: UntagAction{TagNumber: tagRPFSkip},
+		},
+	)
+
 	rules = append(rules,
 		// Send non-workload traffic to the untracked policy chains.
 		Rule{Match: Match().NotTagged(tagFromWorkload),
@@ -922,6 +947,42 @@ func (r *DefaultRuleRenderer) StaticRawPreroutingChain(ipVersion uint8) *Chain {
 	}
 	if err := result.Organize(); err != nil {
 		log.WithField("err", err).Panic("Failed StaticRawPreroutingChain result Organize")
+	}
+	return result
+}
+
+// RPFSkipChain は、RPF の検査を除外するパケットを判定する raw のチェイン（cali-R-rpf-skip）を返す。
+//
+// 本家の updateRPFSkipChain() と同じく、allowSpoofedSourcePrefixes を持つワークロードについて、
+// 「そのインターフェースから到着し、かつ許可された送信元プレフィックスに一致する」パケットだけを除外する。
+// 本家は除外対象を raw で ACCEPT するが、IPFW の allow は評価全体を終えるため使わず、
+// RPF を飛ばす印（Scratch1 の tag）を付けて戻る。印は StaticRawPreroutingChain の
+// RPF 検査で参照し、検査の直後に消す。
+// spoofConfig は「インターフェース名 → 許可する送信元プレフィックス」。
+func (r *DefaultRuleRenderer) RPFSkipChain(spoofConfig map[string][]string) *Chain {
+	ifaceNames := make([]string, 0, len(spoofConfig))
+	for ifaceName := range spoofConfig {
+		ifaceNames = append(ifaceNames, ifaceName)
+	}
+	// map の順序は毎回変わるため、ルールの並びが変わって再反映されないよう並べ替える。
+	sort.Strings(ifaceNames)
+
+	rules := []Rule{}
+	for _, ifaceName := range ifaceNames {
+		for _, prefix := range spoofConfig[ifaceName] {
+			rules = append(rules, Rule{
+				Match:  Match().SourceNet(prefix).DestNet("any").InInterface(ifaceName),
+				Action: ReturnTagAction{TagNumber: r.IpfwTagScratch1},
+			})
+		}
+	}
+
+	result := &Chain{
+		Name:  ChainRawRpfSkip,
+		Rules: rules,
+	}
+	if err := result.Organize(); err != nil {
+		log.WithField("err", err).Panic("Failed RPFSkipChain result Organize")
 	}
 	return result
 }

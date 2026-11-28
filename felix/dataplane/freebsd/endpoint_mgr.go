@@ -868,22 +868,12 @@ func (m *endpointManager) hasSourceSpoofingConfiguration(interfaceName string) b
 
 func (m *endpointManager) updateRPFSkipChain() {
 	log.Debug("Updating RPF skip chain")
-	chain := &ipfw.Chain{
-		Name:  rules.ChainRpfSkip,
-		Rules: make([]ipfw.Rule, 0),
-	}
-	if err := chain.Organize(); err != nil {
-		log.WithField("err", err).Panic("Failed updateRPFSkipChain result Organize")
-	}
-	for interfaceName, addresses := range m.sourceSpoofingConfig {
-		for _, addr := range addresses {
-			chain.Rules = append(chain.Rules, ipfw.Rule{
-				Match:  ipfw.Match().InInterface(interfaceName).SourceNet(addr),
-				Action: ipfw.AllowAction{},
-			})
-		}
-	}
-	m.rawRuleSet.UpdateChain(chain)
+	// チェインの生成は rules.RPFSkipChain に任せる。以前の実装には次の問題があった。
+	// - ルールを追加する前に Organize() していたため、追加したルールに番号が付かなかった。
+	// - 名前にテーブル名（R-）がなく、raw の R-PREROUTING から呼ぶ名前と一致せず、
+	//   反映済みとも認識されなかった。
+	// - raw の中で allow を使っており、IPFW では評価全体が終わってしまう。
+	m.rawRuleSet.UpdateChain(m.ruleRenderer.RPFSkipChain(m.sourceSpoofingConfig))
 }
 
 func (m *endpointManager) resolveEndpointTags() {

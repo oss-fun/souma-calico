@@ -154,6 +154,15 @@ func (m MatchCriteria) ConntrackState(state string) MatchCriteria {
 	return append(m, state)
 }
 
+// NotVerrevpath は、受信したインターフェースが送信元アドレスへの経路の出力インターフェースと
+// 一致しないパケットに一致する（"not verrevpath"）。送信元の詐称の検出（RPF）に使う。
+// ipfw(8): "For incoming packets, a routing table lookup is done on the packet's source address.
+// If the interface on which the packet entered the system matches the outgoing interface for
+// the route, the packet matches."
+func (m MatchCriteria) NotVerrevpath() MatchCriteria {
+	return append(m, "not verrevpath")
+}
+
 // RecordState は、このルールに一致したときに動的ルールを作る（"record-state :flowname"）。
 // 動的ルールはプロトコル・送信元/宛先の IP とポートの組で、両方向の通信に一致する（ipfw(8)）。
 // keep-state と異なり、このルール自身では check-state を行わない。

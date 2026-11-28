@@ -238,6 +238,7 @@ var (
 )
 
 type RuleRenderer interface {
+	RPFSkipChain(spoofConfig map[string][]string) *ipfw.Chain
 	StaticFilterTableChains(ipVersion uint8) []*ipfw.Chain
 	StaticNATTableChains(ipVersion uint8) []*ipfw.Chain
 	StaticNATPostroutingChains(ipVersion uint8) []*ipfw.Chain
